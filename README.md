@@ -30,6 +30,13 @@ extensions are written, installed and kept up to date (epic MB-34, thread 2255 i
     `python3 -m rota hold|use` on the machine.
   - `rota.folder {folder, account}`: runs in that agent folder start on that account while it has room
     (no account: the folder follows the rule again).
+  - `rota.agent {agent, account}`: the same for an agent, by its handle. An agent's account wins over its
+    folder's.
+- **Cooldown:** an account runs moved off sits out 10 minutes (`cooldown_minutes`) even if it looks fine
+  again, unless nothing else can take runs: its numbers can lag, and two nearly full accounts would otherwise
+  take turns run by run.
+- **Each move is on the machine's status:** the account runs start on says since when and why in `mb health`
+  and on Machines ("since 14:05 (work was at 97%)"), and `rota.status` keeps the last 10 moves.
 
 ## Install on a node
 

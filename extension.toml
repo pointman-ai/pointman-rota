@@ -1,7 +1,7 @@
 [extension]
 id = "rota"
 name = "Rota"
-version = "0.4.0"
+version = "0.5.0"
 publisher = "aurelio"
 summary = "Claude accounts taken in turns: each run starts on the account with the most room left."
 node = ">=0.1,<1"
@@ -40,6 +40,12 @@ maximum = 100
 default = 90
 description = "Move new runs off an account once either window is this full (%)"
 
+[settings.properties.cooldown_minutes]
+type = "integer"
+minimum = 0
+default = 10
+description = "After moving runs to another account, stay on it this long, unless it can't take runs at all"
+
 [settings.properties.check_minutes]
 type = "integer"
 minimum = 5
@@ -60,6 +66,11 @@ params = { type = "object", properties = { to = { type = "string", description =
 kind = "rota.hold"
 title = "Keep runs off an account, or put it back"
 params = { type = "object", required = ["account"], properties = { account = { type = "string", description = "The account's label." }, held = { type = "boolean", description = "false puts it back in turn.", default = true } } }
+
+[[commands]]
+kind = "rota.agent"
+title = "Start an agent's runs on one account"
+params = { type = "object", required = ["agent"], properties = { agent = { type = "string", description = "The agent's handle (scene)." }, account = { type = "string", description = "The account's label; left out, the agent's runs follow the rule again." } } }
 
 [[commands]]
 kind = "rota.folder"

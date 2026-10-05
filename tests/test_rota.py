@@ -256,3 +256,32 @@ def test_codex_accounts(host, tmp_path):
     # Claude's accounts are their own: a Codex move doesn't move Claude runs
     assert host.call("session.prepare", {"run": 4, "client": "claude"})["account"] != "spare"
     assert host.run("rota.status", {}).result["codex"]["current"] == "spare"
+
+
+def test_moves_cooldown_and_agents(host, tmp_path):
+    """MB-42: each move is kept with why, for the machine's status; an account runs moved off sits out a
+    cooldown even if it looks fine again; an agent can be mapped to an account (cswap's map)."""
+    parts(host, claude_checked)
+    assert host.call("session.prepare", {"run": 1, "handle": "scene", "client": "claude"})["account"] == "work"
+    full = {"status": "allowed", "unifiedWindows": {"five_hour": {"utilization": 0.97, "resetsAt": 4102444800}}}
+    host.call("session.ended", {"run": 1, "account": "work", "status": "done", "error": None, "limits": full})
+    assert host.call("session.prepare", {"run": 2, "handle": "scene", "client": "claude"})["account"] == "spare"
+    status = host.run("rota.status", {}).result
+    assert status["moves"][-1]["from"] == "work" and status["moves"][-1]["to"] == "spare"
+    assert status["moves"][-1]["why"] == "work was at 97%"
+    got = parts(host, lambda g: "since" in g["spare"]["why"])
+    assert "runs start here since " in got["spare"]["why"] and got["spare"]["why"].endswith("(work was at 97%)")
+
+    # spare fills too, and work looks empty again (its window reset): work sits out its cooldown
+    host.call("session.ended", {"run": 2, "account": "spare", "status": "done", "error": None, "limits": {
+        "status": "allowed", "unifiedWindows": {"five_hour": {"utilization": 0.95, "resetsAt": 4102444800}}}})
+    host.call("session.ended", {"run": 3, "account": "work", "status": "done", "error": None, "limits": {
+        "status": "allowed", "unifiedWindows": {"five_hour": {"utilization": 0.10, "resetsAt": 4102444800}}}})
+    assert host.call("session.prepare", {"run": 4, "handle": "rig", "client": "claude"})["account"] == "spare"
+
+    # an agent mapped to an account starts there while it can take runs
+    host.run("rota.agent", {"agent": "@scene", "account": "work"})
+    assert host.call("session.prepare", {"run": 5, "handle": "scene", "client": "claude"}) == {
+        "env": {"CLAUDE_CODE_OAUTH_TOKEN": WORK}, "account": "work"}
+    assert host.call("session.prepare", {"run": 6, "handle": "rig", "client": "claude"})["account"] == "spare"
+    assert host.run("rota.agent", {"agent": "scene"}).result["agents"] == {}
