@@ -30,15 +30,17 @@ Needs a node from https://github.com/jamescalam/message-board/commit/d6584a5 or 
 brings one from core).
 
 ```
-git clone git@github.com:pointman-ai/mb-rota.git ~/Documents/mb-rota && mb ext add ~/Documents/mb-rota
+mb node add rota
 ```
 
-The running node starts it within 10 seconds; `mb ext add` again after a `git pull` moves it to the new
-version.
+That clones https://github.com/pointman-ai/mb-rota, installs it and starts it on the running node within 10
+seconds. `mb node add rota` again moves it to the newest version.
 
-Add each other account once: run `claude setup-token` signed in as that account and copy the token it prints.
-Then, in any thread in the apps, type `/secrets add rota.work` and paste it. The app seals it for your
-machines, and rota picks it up within a minute.
+Until it has an account besides the machine's own login, rota shows "No Claude account yet" on Machines and
+in Needs you. Run `claude setup-token` signed in as the other account and copy the token it prints, then tap
+**Add** there, or type `/rota add` in any thread, and paste it with a label (`work`). The app seals it for
+your machines as the vault item `rota.<label>`, and rota picks it up within a minute. (`/secrets add rota.work`
+does the same.)
 
 Or keep a token on one machine only: `cd ~/Documents/mb-rota && python3 -m rota add work`.
 `python3 -m rota hold <label>` keeps runs off an account (a vault one too), and `use <label>` puts it back.

@@ -1,7 +1,7 @@
 [extension]
 id = "rota"
 name = "Rota"
-version = "0.2.0"
+version = "0.2.1"
 publisher = "aurelio"
 summary = "Claude accounts taken in turns: each run starts on the account with the most room left."
 node = ">=0.1,<1"
@@ -18,6 +18,16 @@ secrets = ["rota.*"]             # each account's token, kept in the vault as ro
 # the node asks rota which account each Claude Code run starts on, and tells it the account's limits after
 [sessions]
 env = ["CLAUDE_CODE_OAUTH_TOKEN"]
+
+# each account: the apps offer /rota add, and an alert until there's one (MB-154)
+[[credentials]]
+id = "account"
+title = "Claude account"
+help = "Run `claude setup-token` signed in as the account, and paste the token it prints."
+item = "rota.{label}"
+value = "sk-ant-oat\\d+-[A-Za-z0-9_-]{20,}"
+placeholder = "sk-ant-oat01-…"
+needed = 1
 
 [settings]
 type = "object"
