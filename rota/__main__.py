@@ -16,7 +16,7 @@ from pathlib import Path
 
 from mb_extension import Extension
 
-from rota import accounts, codex, probe
+from rota import accounts, codex, probe, signin
 
 ext = Extension()
 lock = threading.Lock()
@@ -262,6 +262,24 @@ def health(p: dict) -> list[dict]:
                     "needs": ["auth"] if refused else [],
                     "why": accounts.describe(label, seen, cx["current"], now)})
     return out
+
+
+signins = signin.SignIns()
+
+
+@ext.method("credentials.sign_in")
+def sign_in(p: dict) -> dict:
+    """Sign an account in from the apps (MB-216): Claude Code's own setup-token, its link for the person."""
+    if p.get("form") != "account":
+        raise ValueError("rota signs in Claude accounts only (form: account)")
+    label_of(p, "label")
+    return signins.start(str(p.get("session") or ""))
+
+
+@ext.method("credentials.code")
+def sign_in_code(p: dict) -> dict:
+    """The code the sign-in page showed: the token comes back for the node to seal into the vault."""
+    return signins.code(str(p.get("session") or ""), str(p.get("code") or ""))
 
 
 @ext.method("health.fix")

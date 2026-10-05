@@ -94,6 +94,18 @@ def test_the_cli_keeps_tokens_for_this_user_only(tmp_path):
 
 MB = Path(os.environ.get("MB_REPO") or ROOT.parent / "message-board")
 FAKE = """#!/bin/sh
+if [ "$1" = "setup-token" ]; then
+  # Claude Code's sign-in, as far as rota needs it: a link that comes back to this machine (it would open
+  # a browser), one that works anywhere, then the token for the right code
+  open "https://claude.com/cai/oauth/authorize?code=true&redirect_uri=http%3A%2F%2Flocalhost%3A1234%2Fcallback&state=x"
+  printf 'Browser didn'"'"'t open? Use the url below to sign in\n'
+  printf '\033]8;id=1;https://claude.com/cai/oauth/authorize?code=true&redirect_uri=https%%3A%%2F%%2Fplatform.claude.com%%2Foauth%%2Fcode%%2Fcallback&state=x\007link\033]8;;\007\n'
+  printf 'Paste code here if prompted > '
+  read code
+  if [ "$code" = "good-code-1234" ]; then printf '\nYour OAuth token (valid for 1 year):\n\nsk-ant-oat01-%s\n' "signedinsignedinsignedinsignedin1234"
+  else printf '\nOAuth error: Invalid code\n'; fi
+  exit 0
+fi
 # Claude Code, as far as rota's check needs: one rate_limit_event, how full by which token it's given
 case "$CLAUDE_CODE_OAUTH_TOKEN" in
   "") used=0.95 ;;
@@ -292,3 +304,26 @@ def test_moves_cooldown_and_agents(host, tmp_path):
     assert host.call("session.prepare", {"run": 7, "handle": "scene", "client": "claude"}) == {
         "env": {"CLAUDE_CODE_OAUTH_TOKEN": WORK}, "account": "work"}
     assert host.run("rota.agent", {"agent": "scene"}).result["agents"] == {}
+
+
+def test_signing_an_account_in_from_the_apps(host, tmp_path):
+    """MB-216: rota runs Claude Code's own setup-token, gives the node the link that works on any device
+    (never this machine's localhost, and no browser opens here), and turns the pasted code into the token
+    as the payload the vault takes."""
+    got = host.call("credentials.sign_in", {"form": "account", "label": "work", "person": "james",
+                                            "session": "sgn_1"}, timeout=60)
+    assert got["url"].startswith("https://claude.com/cai/oauth/authorize") and "platform.claude.com" in got["url"]
+    assert "localhost" not in got["url"] and "paste the code" in got["prompt"]
+    with pytest.raises(Exception, match="didn't take that code"):
+        host.call("credentials.code", {"form": "account", "session": "sgn_1", "code": "wrong-code-0000"}, timeout=60)
+    with pytest.raises(Exception, match="has ended"):        # one try per sign-in
+        host.call("credentials.code", {"form": "account", "session": "sgn_1", "code": "good-code-1234"}, timeout=60)
+    host.call("credentials.sign_in", {"form": "account", "label": "work", "session": "sgn_2"}, timeout=60)
+    value = host.call("credentials.code", {"form": "account", "session": "sgn_2", "code": "good-code-1234"},
+                      timeout=60)["value"]
+    assert json.loads(value) == {"kind": "env", "vars": {
+        "CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-signedinsignedinsignedinsignedin1234"}}
+    with pytest.raises(Exception, match="label"):
+        host.call("credentials.sign_in", {"form": "account", "label": "Not A Label", "session": "sgn_3"})
+    with pytest.raises(Exception, match="sign-in code"):
+        host.call("credentials.code", {"form": "account", "session": "sgn_3", "code": "x; rm -rf /"})

@@ -56,6 +56,11 @@ in Needs you. Run `claude setup-token` signed in as the other account and copy t
 your machines as the vault item `rota.<label>`, and rota picks it up within a minute. (`/secrets add rota.work`
 does the same.)
 
+Or tap **Sign in** on that sheet instead (MB-216, once core and the apps have their halves): rota runs
+`claude setup-token` on the machine and the app opens its sign-in link, on any device. Sign in as the other
+account, paste the code the page shows back into the app, and the token goes straight into the vault, sealed
+for your machines, without anyone seeing it.
+
 Or keep a token on one machine only: `cd ~/Documents/mb-rota && python3 -m rota add work`.
 `python3 -m rota hold <label>` keeps runs off an account (a vault one too), and `use <label>` puts it back.
 

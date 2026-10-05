@@ -1,7 +1,7 @@
 [extension]
 id = "rota"
 name = "Rota"
-version = "0.5.1"
+version = "0.6.0"
 publisher = "aurelio"
 summary = "Claude accounts taken in turns: each run starts on the account with the most room left."
 node = ">=0.1,<1"
@@ -29,6 +29,7 @@ item = "rota.{label}"
 value = "sk-ant-oat\\d+-[A-Za-z0-9_-]{20,}"
 placeholder = "sk-ant-oat01-…"
 needed = 1
+sign_in = true                   # or Sign in: rota runs `claude setup-token`, and the token goes in the vault (MB-216)
 
 [settings]
 type = "object"
