@@ -34,7 +34,8 @@ def load_store(path: Path | None = None) -> dict:
     except (OSError, ValueError):
         d = {}
     accounts = [a for a in d.get("accounts") or [] if isinstance(a, dict) and LABEL.fullmatch(str(a.get("label")))]
-    return {"accounts": accounts}
+    codex = [a for a in d.get("codex") or [] if isinstance(a, dict) and LABEL.fullmatch(str(a.get("label")))]
+    return {"accounts": accounts, "codex": codex}
 
 
 def save_store(store: dict, path: Path | None = None) -> None:

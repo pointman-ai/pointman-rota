@@ -124,7 +124,8 @@ def host(tmp_path):
     held = {"rota.spare": f"CLAUDE_CODE_OAUTH_TOKEN={SPARE}\n", "rota.Not A Label": SPARE}
     h = ExtensionHost(ROOT, node="studio", machine="studio", state_dir=tmp_path / "state",
                       env={"PATH": f"{bin_}:{os.environ['PATH']}", "ROTA_STORE": str(store),
-                           "FAKE_CALLS": str(tmp_path / "calls")},
+                           "FAKE_CALLS": str(tmp_path / "calls"), "CODEX_HOME": str(tmp_path / "codex-own"),
+                           "ROTA_CODEX_HOMES": str(tmp_path / "codex-homes")},
                       secrets=lambda name: held[name], secret_names=lambda prefix: sorted(held))
     h.start()
     assert h.wait_ready(20), h.error
@@ -141,9 +142,14 @@ def parts(host, until, timeout=30):
         time.sleep(0.2)
 
 
+def claude_checked(got: dict) -> bool:
+    """Every Claude account checked once (a Codex account stays unknown until a run on it)."""
+    return all(p["state"] != "unknown" for i, p in got.items() if not i.startswith("codex."))
+
+
 def test_rota_on_a_node(host, tmp_path):
     # it checks each account once at start, through Claude Code, on each one's own token
-    got = parts(host, lambda g: all(p["state"] != "unknown" for p in g.values()))
+    got = parts(host, claude_checked)
     assert got["default"]["why"].startswith("5h 95%")
     assert got["work"]["why"].startswith("5h 20%") and got["work"]["state"] == "ok"
     assert got["old"]["needs"] == ["auth"] and got["old"]["state"] == "failing"
@@ -152,7 +158,7 @@ def test_rota_on_a_node(host, tmp_path):
     # the machine's own login is past 90%, so runs start on work, with its token
     run = host.call("session.prepare", {"run": 1, "handle": "scene", "client": "claude"})
     assert run == {"env": {"CLAUDE_CODE_OAUTH_TOKEN": WORK}, "account": "work"}
-    assert host.call("session.prepare", {"run": 2, "handle": "scene", "client": "codex"}) == {}
+    assert host.call("session.prepare", {"run": 2, "handle": "scene", "client": "gemini"}) == {}
     # a run's own report moves it on: work fills up, so runs go to the vault's spare, with its token
     host.call("session.ended", {"run": 1, "account": "work", "status": "done", "error": None, "limits": {
         "status": "allowed", "unifiedWindows": {"five_hour": {"utilization": 0.97, "resetsAt": 4102444800}}}})
@@ -171,7 +177,7 @@ def test_rota_on_a_node(host, tmp_path):
 
 
 def test_swapping_holding_and_folders(host, tmp_path):
-    parts(host, lambda g: all(p["state"] != "unknown" for p in g.values()))
+    parts(host, claude_checked)
     assert host.call("session.prepare", {"run": 1, "client": "claude"})["account"] == "work"
     # asked to, runs move at once, and stay there as after any move
     got = host.run("rota.swap", {"to": "spare"}).result
@@ -207,3 +213,46 @@ def test_swapping_holding_and_folders(host, tmp_path):
         "unifiedWindows": {"five_hour": {"utilization": 1.0, "resetsAt": 4102444800}}}})
     assert host.call("session.prepare", {"run": 6, "client": "claude", "folder": str(agent)})["account"] == "work"
     assert host.run("rota.folder", {"folder": str(agent)}).result["folders"] == {}
+
+
+def rollout(home: Path, used: float, window: int = 10080) -> None:
+    """A Codex session as Codex writes it, with the account's windows in its rate_limits."""
+    day = home / "sessions" / "2026" / "10" / "05"
+    day.mkdir(parents=True, exist_ok=True)
+    line = {"timestamp": "2026-10-05T12:00:00Z", "type": "event_msg", "payload": {"type": "token_count",
+            "rate_limits": {"limit_id": "codex", "primary": {"used_percent": used, "window_minutes": window,
+                                                             "resets_at": 4102444800}, "secondary": None}}}
+    (day / f"rollout-{time.time_ns()}.jsonl").write_text('{"type": "session_meta"}\n' + json.dumps(line) + "\n")
+
+
+def test_codex_accounts(host, tmp_path):
+    """MB-45: a Codex account is a Codex home of its own; a run on it gets CODEX_HOME, and its windows come
+    from the newest session Codex wrote there."""
+    from rota import codex
+    assert codex.windows({"primary": {"used_percent": 12.5, "window_minutes": 300, "resets_at": 1},
+                          "secondary": {"used_percent": 3, "window_minutes": 10080, "resets_at": 2}}) == {
+        "five_hour": {"used": 12.5, "resets": 1}, "seven_day": {"used": 3.0, "resets": 2}}
+    own, spare = tmp_path / "codex-own", tmp_path / "codex-homes" / "spare"
+    (own).mkdir()
+    (own / "auth.json").write_text("{}")
+    # the machine's own login only, so far: runs start on it, with nothing set
+    assert host.call("session.prepare", {"run": 1, "client": "codex"}) == {"env": {}, "account": "default"}
+    rollout(own, 95.0)
+    host.call("session.ended", {"run": 1, "client": "codex", "account": "default", "status": "done", "error": None,
+                                "limits": None})
+    # another account, signed in in a home of its own (as `rota codex add` leaves it)
+    spare.mkdir(parents=True)
+    (spare / "auth.json").write_text("{}")
+    store = accounts.load_store(tmp_path / "rota.json")
+    store["codex"] = [{"label": "spare"}]
+    accounts.save_store(store, tmp_path / "rota.json")
+    rollout(spare, 10.0)
+    host.call("session.ended", {"run": 2, "client": "codex", "account": "spare", "status": "done", "error": None,
+                                "limits": None})
+    assert host.call("session.prepare", {"run": 3, "client": "codex"}) == {
+        "env": {"CODEX_HOME": str(spare)}, "account": "spare"}
+    got = parts(host, lambda g: "codex.spare" in g)
+    assert got["codex.default"]["why"].startswith("week 95%") and got["codex.spare"]["why"].endswith("runs start here")
+    # Claude's accounts are their own: a Codex move doesn't move Claude runs
+    assert host.call("session.prepare", {"run": 4, "client": "claude"})["account"] != "spare"
+    assert host.run("rota.status", {}).result["codex"]["current"] == "spare"

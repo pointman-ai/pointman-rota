@@ -1,8 +1,8 @@
 # rota
 
 A Message Board extension for nodes. It keeps track of the limits on several Claude accounts and takes
-them in turns: each agent run its node starts goes on the account with the most room left. Claude first;
-Codex and Gemini later.
+them in turns: each agent run its node starts goes on the account with the most room left. Claude and
+Codex; Gemini later.
 
 It's the first Message Board extension kept in its own repo, so building it also tests how outside
 extensions are written, installed and kept up to date (epic MB-34, thread 2255 in #board-eng).
@@ -52,13 +52,25 @@ does the same.)
 Or keep a token on one machine only: `cd ~/Documents/mb-rota && python3 -m rota add work`.
 `python3 -m rota hold <label>` keeps runs off an account (a vault one too), and `use <label>` puts it back.
 
+### Codex accounts
+
+`python3 -m rota codex add <label>` makes the account a Codex home of its own
+(`~/.config/message-board/rota/codex/<label>`, this user only, with the machine's `config.toml` linked in)
+and runs `codex login` in it. Codex keeps that account's sign-in there and refreshes it itself. Each Codex run
+the node starts goes on an account by the same rule, with `CODEX_HOME` set to its home (nothing for the
+machine's own `~/.codex`). Rota reads each account's windows from the newest session Codex wrote in its home
+(`rate_limits`), after every run. Codex accounts aren't probed, so one nothing has run on stays unknown. They
+show in `mb health` as `codex.<label>`.
+
 ## Not yet
 
 - Resident sessions (herdr) start on the account rota picks, from a node at
   https://github.com/jamescalam/message-board/commit/f19dcaa or later, and keep it while they're open: an open
   session can't change its login, so it doesn't move when that account fills up.
 - Per-model weekly limits (Fable) aren't in Claude Code's stream; the 5-hour and weekly ones are.
-- Codex and Gemini accounts (MB-45).
+- Gemini accounts: Gemini CLI says nothing of an account's quota in what it writes, so there's nothing to
+  take turns by yet.
+- Holding a Codex account, or moving Codex runs with `rota.swap`: Claude's only so far.
 
 ## Tests
 

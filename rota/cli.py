@@ -13,10 +13,13 @@ On this machine only:
 python3 -m rota add <label>     add an account: paste the token `claude setup-token` printed
 python3 -m rota remove <label>  take one out
 python3 -m rota hold <label>    keep runs off it for now, a vault one too (use: put it back)
-python3 -m rota list            the accounts in this machine's file (never their tokens)"""
+python3 -m rota list            the accounts in this machine's file (never their tokens)
+python3 -m rota codex add <label>  a Codex account: signed in with `codex login` in a Codex home of its own"""
 
 
 def main(argv: list[str]) -> int:
+    if argv[:1] == ["codex"]:
+        return codex_main(argv[1:])
     cmd, label = argv[0], (argv[1].lower() if len(argv) > 1 else "")
     store = accounts.load_store()
     named = next((a for a in store["accounts"] if a["label"] == label), None)
@@ -51,4 +54,18 @@ def main(argv: list[str]) -> int:
         store["accounts"] = [a for a in store["accounts"] if a["label"] != label]
         accounts.save_store(store)
     print({"remove": f"removed {label}", "hold": f"runs stay off {label}", "use": f"{label} is back in turn"}[cmd])
+    return 0
+
+
+def codex_main(argv: list[str]) -> int:
+    from rota import codex
+    label = argv[1].lower() if len(argv) > 1 else ""
+    if argv[:1] != ["add"] or not accounts.LABEL.fullmatch(label) or label == accounts.DEFAULT:
+        print("python3 -m rota codex add <label>   (lowercase letters, digits, . _ -; not default)", file=sys.stderr)
+        return 2
+    try:
+        print(codex.add(label))
+    except RuntimeError as e:
+        print(str(e), file=sys.stderr)
+        return 1
     return 0
