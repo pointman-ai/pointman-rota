@@ -20,7 +20,7 @@ from rota import accounts, probe
 
 ext = Extension()
 lock = threading.Lock()
-state: dict = {"seen": {}, "current": None}
+state: dict = {"seen": {}, "current": None, "folders": {}}
 LIST_SECONDS = 60           # how often the vault's rota.* names are looked at
 OPEN_SECONDS = 1800         # how long an opened token is kept before it's opened again (each open is logged)
 vault: dict = {"listed": 0.0, "names": [], "opened": {}, "said": None}
@@ -77,7 +77,7 @@ def state_file() -> Path:
 def load_state() -> None:
     try:
         d = json.loads(state_file().read_text(encoding="utf-8"))
-        state.update({"seen": d.get("seen") or {}, "current": d.get("current")})
+        state.update({"seen": d.get("seen") or {}, "current": d.get("current"), "folders": d.get("folders") or {}})
     except (OSError, ValueError):
         pass
 
@@ -97,7 +97,7 @@ def summary() -> dict:
     """What the apps and agents see: labels, how full, when each resets. Never a token."""
     toks = all_tokens()
     now = time.time()
-    return {"current": state["current"], "threshold": threshold(), "accounts": [
+    return {"current": state["current"], "threshold": threshold(), "folders": dict(state["folders"]), "accounts": [
         {"label": label, "own_login": label == accounts.DEFAULT, "used": accounts.used(state["seen"].get(label), now),
          **{k: v for k, v in (state["seen"].get(label) or {}).items() if k in ("five_hour", "seven_day", "status",
                                                                               "needs_auth", "checked_at")},
@@ -134,6 +134,10 @@ def prepare(p: dict) -> dict:
     if p.get("client") != "claude":
         return {}
     toks = all_tokens()
+    pinned = state["folders"].get(folder_key(p.get("folder")))
+    if pinned in toks and not (state["seen"].get(pinned) or {}).get("needs_auth") \
+            and (accounts.used(state["seen"].get(pinned)) or 0) < 100:
+        return {"env": {"CLAUDE_CODE_OAUTH_TOKEN": toks[pinned]} if toks[pinned] else {}, "account": pinned}
     with lock:
         label = accounts.choose(list(toks), state["seen"], state["current"], threshold())
         if label != state["current"]:
@@ -181,6 +185,66 @@ def fix(p: dict) -> dict:
 @ext.command("rota.status")
 def status(job) -> dict:
     return summary()
+
+
+def folder_key(folder) -> str | None:
+    return str(Path(folder).expanduser().resolve()) if folder else None
+
+
+def label_of(p: dict, key: str = "account") -> str:
+    label = str(p.get(key) or "").strip().lower()
+    if not accounts.LABEL.fullmatch(label):
+        raise ValueError(f"{key}: an account's label, like work")
+    return label
+
+
+@ext.command("rota.swap")
+def swap(job) -> dict:
+    """New runs start on this account from now on (or, with none named, the one with the most room), and
+    stay there until it's full, as after any move."""
+    toks = all_tokens()
+    with lock:
+        to = label_of(job.params, "to") if job.params.get("to") else accounts.most_room(list(toks), state["seen"])
+        if to not in toks:
+            raise ValueError(f"no account {to!r} to start runs on here: {', '.join(toks)}")
+        if (state["seen"].get(to) or {}).get("needs_auth"):
+            raise ValueError(f"{to}'s token was refused: sign it in again first")
+        was, state["current"] = state["current"], to
+        save_state()
+    ext.log(f"runs start on {to} now (was {was}), as asked")
+    ext.event("rota.accounts", summary())
+    return {"message": f"New runs on {ext.node.get('machine')} start on {to}" + (f" (was {was})" if was else ""),
+            **summary()}
+
+
+@ext.command("rota.hold")
+def hold(job) -> dict:
+    """Keep runs off an account until it's put back (`use`): its token stays where it is."""
+    label = label_of(job.params)
+    if label == accounts.DEFAULT:
+        raise ValueError("the machine's own login can't be held: it's what runs fall back to")
+    accounts.hold(label, job.params.get("held", True) is not False)
+    ext.event("rota.accounts", summary())
+    return {"message": f"runs stay off {label}" if job.params.get("held", True) is not False
+            else f"{label} is back in turn", **summary()}
+
+
+@ext.command("rota.folder")
+def folder(job) -> dict:
+    """Runs in this folder start on this account while it has room (none named: back to the rule)."""
+    key = folder_key(job.params.get("folder"))
+    if not key:
+        raise ValueError("folder: an agent's folder on this machine")
+    label = label_of(job.params) if job.params.get("account") else None
+    with lock:
+        if label:
+            state["folders"][key] = label
+        else:
+            state["folders"].pop(key, None)
+        save_state()
+    ext.event("rota.accounts", summary())
+    return {"message": f"runs in {key} start on {label}" if label else f"runs in {key} follow the rule again",
+            **summary()}
 
 
 def check_idle() -> None:

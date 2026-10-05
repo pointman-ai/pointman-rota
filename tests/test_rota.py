@@ -168,3 +168,42 @@ def test_rota_on_a_node(host, tmp_path):
     assert SPARE not in json.dumps(status)
     fixed = host.call("health.fix", {"part": "old", "action": "auth"})
     assert "claude setup-token" in fixed["message"] and "python3 -m rota add old" in fixed["message"]
+
+
+def test_swapping_holding_and_folders(host, tmp_path):
+    parts(host, lambda g: all(p["state"] != "unknown" for p in g.values()))
+    assert host.call("session.prepare", {"run": 1, "client": "claude"})["account"] == "work"
+    # asked to, runs move at once, and stay there as after any move
+    got = host.run("rota.swap", {"to": "spare"}).result
+    assert got["current"] == "spare" and got["message"] == "New runs on studio start on spare (was work)"
+    assert host.call("session.prepare", {"run": 2, "client": "claude"})["account"] == "spare"
+    with pytest.raises(Exception, match="token was refused"):
+        host.run("rota.swap", {"to": "old"})
+    with pytest.raises(Exception, match="no account 'gone'"):
+        host.run("rota.swap", {"to": "gone"})
+    # none named: the one with the most room (work and spare are both at 20%, default at 95%)
+    assert host.run("rota.swap", {}).result["current"] in ("work", "spare")
+
+    # held, an account is left out until it's put back; the machine's own login can't be
+    assert host.run("rota.hold", {"account": "spare"}).result["message"] == "runs stay off spare"
+    assert "spare" not in [a["label"] for a in host.run("rota.status", {}).result["accounts"]]
+    assert host.call("session.prepare", {"run": 3, "client": "claude"})["account"] == "work"
+    host.run("rota.hold", {"account": "spare", "held": False})
+    assert "spare" in [a["label"] for a in host.run("rota.status", {}).result["accounts"]]
+    with pytest.raises(Exception, match="can't be held"):
+        host.run("rota.hold", {"account": "default"})
+
+    # a folder's runs start on its own account, whatever the rule picks for the rest
+    agent = tmp_path / "agent"
+    agent.mkdir()
+    host.run("rota.folder", {"folder": str(agent), "account": "spare"})
+    host.run("rota.swap", {"to": "work"})
+    assert host.call("session.prepare", {"run": 4, "client": "claude", "folder": str(agent)}) == {
+        "env": {"CLAUDE_CODE_OAUTH_TOKEN": SPARE}, "account": "spare"}
+    assert host.call("session.prepare", {"run": 5, "client": "claude", "folder": "/elsewhere"})["account"] == "work"
+    # ...until it's full: then the rule again
+    host.call("session.ended", {"run": 4, "account": "spare", "status": "done", "error": None, "limits": {
+        "status": "rejected", "resetsAt": 4102444800,
+        "unifiedWindows": {"five_hour": {"utilization": 1.0, "resetsAt": 4102444800}}}})
+    assert host.call("session.prepare", {"run": 6, "client": "claude", "folder": str(agent)})["account"] == "work"
+    assert host.run("rota.folder", {"folder": str(agent)}).result["folders"] == {}

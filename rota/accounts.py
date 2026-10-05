@@ -48,6 +48,17 @@ def save_store(store: dict, path: Path | None = None) -> None:
     tmp.replace(path)
 
 
+def hold(label: str, held: bool, path: Path | None = None) -> None:
+    """Keep runs off an account, or put it back in turn. One kept in the vault is held here by its label."""
+    store = load_store(path)
+    named = next((a for a in store["accounts"] if a["label"] == label), None)
+    if named is None:
+        named = {"label": label}
+        store["accounts"].append(named)
+    named["held"] = held
+    save_store(store, path)
+
+
 def tokens(store: dict) -> dict[str, str | None]:
     """Each usable account's token, in order: this machine's own login first (no token)."""
     out: dict[str, str | None] = {DEFAULT: None}
@@ -102,6 +113,12 @@ def choose(labels: list[str], seen: dict[str, dict], current: str | None, thresh
     if current in usable:
         return current
     return best or usable[0]
+
+
+def most_room(labels: list[str], seen: dict[str, dict], now: float | None = None) -> str | None:
+    """The account with the most room left, of those not refused: one never checked counts as empty."""
+    usable = [label for label in labels if not (seen.get(label) or {}).get("needs_auth")]
+    return min(usable, key=lambda label: used(seen.get(label), now) or 0.0, default=None)
 
 
 def describe(label: str, seen: dict | None, current: str | None, now: float | None = None) -> str:

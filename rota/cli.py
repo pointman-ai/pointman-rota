@@ -42,16 +42,13 @@ def main(argv: list[str]) -> int:
         accounts.save_store(store)
         print(f"added {label}. Rota checks it within a minute; `mb health` shows how full it is.")
         return 0
-    if named is None and cmd in ("hold", "use"):      # an account kept in the vault: held here by its label
-        named = {"label": label}
-        store["accounts"].append(named)
-    if named is None:
+    if cmd in ("hold", "use"):                        # one kept in the vault is held here by its label
+        accounts.hold(label, cmd == "hold")
+    elif named is None:
         print(f"no account {label!r} in this machine's file", file=sys.stderr)
         return 1
-    if cmd == "remove":
-        store["accounts"] = [a for a in store["accounts"] if a["label"] != label]
     else:
-        named["held"] = cmd == "hold"
-    accounts.save_store(store)
+        store["accounts"] = [a for a in store["accounts"] if a["label"] != label]
+        accounts.save_store(store)
     print({"remove": f"removed {label}", "hold": f"runs stay off {label}", "use": f"{label} is back in turn"}[cmd])
     return 0

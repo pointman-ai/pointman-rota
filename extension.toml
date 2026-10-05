@@ -1,7 +1,7 @@
 [extension]
 id = "rota"
 name = "Rota"
-version = "0.2.1"
+version = "0.3.0"
 publisher = "aurelio"
 summary = "Claude accounts taken in turns: each run starts on the account with the most room left."
 node = ">=0.1,<1"
@@ -50,10 +50,31 @@ kind = "rota.status"
 title = "Accounts and their limits"
 params = { type = "object", properties = {} }
 
+[[commands]]
+kind = "rota.swap"
+title = "Start new runs on another account"
+params = { type = "object", properties = { to = { type = "string", description = "The account's label (work); left out, the one with the most room." } } }
+
+[[commands]]
+kind = "rota.hold"
+title = "Keep runs off an account, or put it back"
+params = { type = "object", required = ["account"], properties = { account = { type = "string", description = "The account's label." }, held = { type = "boolean", description = "false puts it back in turn.", default = true } } }
+
+[[commands]]
+kind = "rota.folder"
+title = "Start a folder's runs on one account"
+params = { type = "object", required = ["folder"], properties = { folder = { type = "string", description = "An agent's folder on this machine." }, account = { type = "string", description = "The account's label; left out, the folder's runs follow the rule again." } } }
+
 [[tools]]
 name = "rota_status"
 command = "rota.status"
 description = "This machine's Claude accounts: how full each one's 5-hour and weekly windows are, when they reset, and which one new runs start on."
+returns = "result"
+
+[[tools]]
+name = "rota_swap"
+command = "rota.swap"
+description = "Start this machine's new Claude runs on another account now (a label, or the one with the most room), e.g. before a long job when the current one is nearly full. Runs already going stay where they are."
 returns = "result"
 
 [[events]]
