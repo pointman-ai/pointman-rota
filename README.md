@@ -54,3 +54,7 @@ MB_REPO=~/Documents/message-board python -m pytest tests
 
 The last test runs rota under the node's own extension host with a stand-in for Claude Code, so it needs the
 message-board repo beside this one.
+
+## Licence
+
+MIT. See `LICENSE`.
