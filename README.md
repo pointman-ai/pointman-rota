@@ -25,14 +25,16 @@ extensions are written, installed and kept up to date (epic MB-34, thread 2255 i
 
 ## Install on a node
 
-Needs a node from https://github.com/jamescalam/message-board/commit/1cad474 or later.
+Needs a node from https://github.com/jamescalam/message-board/commit/d6584a5 or later (`mb node update`
+brings one from core).
 
 ```
 git clone git@github.com:pointman-ai/mb-rota.git ~/Documents/mb-rota && mb ext add ~/Documents/mb-rota
 ```
 
-Then restart the node. Add each other account once: run `claude setup-token` signed in as that account,
-copy the token it prints, then:
+The running node starts it within 10 seconds; `mb ext add` again after a `git pull` moves it to the new
+version. Add each other account once: run `claude setup-token` signed in as that account, copy the token it
+prints, then:
 
 ```
 cd ~/Documents/mb-rota && python3 -m rota add work
