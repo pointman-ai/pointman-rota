@@ -68,8 +68,8 @@ show in `mb health` as `codex.<label>`.
   https://github.com/jamescalam/message-board/commit/f19dcaa or later, and keep it while they're open: an open
   session can't change its login, so it doesn't move when that account fills up.
 - Per-model weekly limits (Fable) aren't in Claude Code's stream; the 5-hour and weekly ones are.
-- Gemini accounts: Gemini CLI says nothing of an account's quota in what it writes, so there's nothing to
-  take turns by yet.
+- Gemini accounts: rota has no source yet for how much of a Gemini account's quota is used, so there's
+  nothing to take turns by.
 - Holding a Codex account, or moving Codex runs with `rota.swap`: Claude's only so far.
 
 ## Tests
