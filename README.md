@@ -40,15 +40,24 @@ extensions are written, installed and kept up to date (epic MB-34, thread 2255 i
 
 ## Install on a node
 
-Needs a node from https://github.com/jamescalam/message-board/commit/d6584a5 or later (`mb node update`
-brings one from core).
-
 ```
-mb node add rota
+pointman node add rota
 ```
 
-That clones https://github.com/pointman-ai/mb-rota, installs it and starts it on the running node within 10
-seconds. `mb node add rota` again moves it to the newest version.
+That installs rota from your workspace's catalogue and starts it on the running node within 10 seconds.
+Core fetched it from this repo's releases through the GitHub App, so the machine needs no clone, git or uv.
+`pointman node upgrade rota` moves it to the newest release once core has it, keeping the running version
+until the new one starts, and `pointman node list` shows what's installed and what's latest.
+
+The first time, an owner adds the repo to the catalogue: `pointman core ext add pointman-ai/mb-rota` (the
+workspace needs the GitHub App installed on pointman-ai). For development, `pointman node add <folder>`
+installs a checkout as it is.
+
+### Releasing
+
+Bump `version` in extension.toml, then publish a GitHub release tagged `v<version>` (`gh release create
+v0.6.1`). Core takes the release event, checks and packs the tag's files, and machines show rota behind
+until they run `pointman node upgrade`.
 
 Until it has an account besides the machine's own login, rota shows "No Claude account yet" on Machines and
 in Needs you. Run `claude setup-token` signed in as the other account and copy the token it prints, then tap
