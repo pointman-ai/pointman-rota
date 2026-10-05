@@ -54,7 +54,9 @@ Or keep a token on one machine only: `cd ~/Documents/mb-rota && python3 -m rota 
 
 ## Not yet
 
-- Resident sessions (herdr) start on the machine's own login.
+- Resident sessions (herdr) start on the account rota picks, from a node at
+  https://github.com/jamescalam/message-board/commit/f19dcaa or later, and keep it while they're open: an open
+  session can't change its login, so it doesn't move when that account fills up.
 - Per-model weekly limits (Fable) aren't in Claude Code's stream; the 5-hour and weekly ones are.
 - Codex and Gemini accounts (MB-45).
 
