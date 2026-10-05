@@ -28,7 +28,7 @@ extensions are written, installed and kept up to date (epic MB-34, thread 2255 i
 Needs a node from https://github.com/jamescalam/message-board/commit/1cad474 or later.
 
 ```
-git clone git@github.com:pointman-ai/mb-rota.git ~/Documents/mb-rota && mb node ext add ~/Documents/mb-rota
+git clone git@github.com:pointman-ai/mb-rota.git ~/Documents/mb-rota && mb ext add ~/Documents/mb-rota
 ```
 
 Then restart the node. Add each other account once: run `claude setup-token` signed in as that account,
