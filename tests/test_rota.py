@@ -279,9 +279,16 @@ def test_moves_cooldown_and_agents(host, tmp_path):
         "status": "allowed", "unifiedWindows": {"five_hour": {"utilization": 0.10, "resetsAt": 4102444800}}}})
     assert host.call("session.prepare", {"run": 4, "handle": "rig", "client": "claude"})["account"] == "spare"
 
+    # spare runs out altogether: runs leave it at once, cooldown or not, for one that can take them
+    # (default, at 95%: work is still cooling down)
+    host.call("session.ended", {"run": 5, "account": "spare", "status": "limited", "error": "usage limit reached",
+                                "limits": {"status": "rejected", "resetsAt": 4102444800, "unifiedWindows": {
+                                    "five_hour": {"utilization": 1.0, "resetsAt": 4102444800}}}})
+    assert host.call("session.prepare", {"run": 6, "handle": "rig", "client": "claude"})["account"] == "default"
+    host.run("rota.swap", {"to": "spare"})       # (back, for what follows)
+
     # an agent mapped to an account starts there while it can take runs
     host.run("rota.agent", {"agent": "@scene", "account": "work"})
-    assert host.call("session.prepare", {"run": 5, "handle": "scene", "client": "claude"}) == {
+    assert host.call("session.prepare", {"run": 7, "handle": "scene", "client": "claude"}) == {
         "env": {"CLAUDE_CODE_OAUTH_TOKEN": WORK}, "account": "work"}
-    assert host.call("session.prepare", {"run": 6, "handle": "rig", "client": "claude"})["account"] == "spare"
     assert host.run("rota.agent", {"agent": "scene"}).result["agents"] == {}

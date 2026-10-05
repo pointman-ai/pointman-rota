@@ -182,10 +182,11 @@ def prepare(p: dict) -> dict:
             return {"env": {"CLAUDE_CODE_OAUTH_TOKEN": toks[pinned]} if toks[pinned] else {}, "account": pinned}
     with lock:
         current, now = state["current"], time.time()
-        # one runs moved off lately sits out the cooldown, unless nothing else is left
+        # one runs moved off lately sits out the cooldown, and one that can't take runs is out too; with
+        # nothing left that can, every account is in the running again
         rested = [label for label in toks if now - float(state["left"].get(label) or 0) >= cooldown()]
-        label = accounts.choose([lb for lb in toks if lb in rested or lb == current] or list(toks), state["seen"],
-                                current, threshold())
+        pool = [lb for lb in toks if (lb in rested or lb == current) and takes_runs(state["seen"].get(lb), now)]
+        label = accounts.choose(pool or list(toks), state["seen"], current, threshold())
         if label != current:
             moved(current, label, why_left(current, state["seen"].get(current)))
             state["current"] = label
