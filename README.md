@@ -9,9 +9,10 @@ extensions are written, installed and kept up to date (epic MB-34, thread 2255 i
 
 ## How it works
 
-- **Accounts:** this machine's own Claude login (`default`), plus any you add with a setup token. Tokens
-  stay on the machine, in `~/.config/message-board/rota.json`, which only its user can read. They never go
-  through the board.
+- **Accounts:** this machine's own Claude login (`default`), plus any you add with a setup token. Each one
+  is a vault item named `rota.<label>`, sealed for your machines: the node opens rota's own items with the
+  machine's key (`secrets = ["rota.*"]`) and shows rota nothing else in the vault. A token can also stay on
+  one machine only, in `~/.config/message-board/rota.json`.
 - **Limits:** Claude Code reports an account's 5-hour and weekly windows in every run's stream
   (`rate_limit_event`), and the node passes them to rota when the run ends (`session.ended`). An account
   nothing has run on for 30 minutes is checked with a one-line Haiku run, through Claude Code on that
@@ -33,20 +34,20 @@ git clone git@github.com:pointman-ai/mb-rota.git ~/Documents/mb-rota && mb ext a
 ```
 
 The running node starts it within 10 seconds; `mb ext add` again after a `git pull` moves it to the new
-version. Add each other account once: run `claude setup-token` signed in as that account, copy the token it
-prints, then:
+version.
 
-```
-cd ~/Documents/mb-rota && python3 -m rota add work
-```
+Add each other account once: run `claude setup-token` signed in as that account and copy the token it prints.
+Then, in any thread in the apps, type `/secrets add rota.work` and paste it. The app seals it for your
+machines, and rota picks it up within a minute.
 
-`python3 -m rota list`, `hold <label>`, `use <label>` and `remove <label>` do the rest.
+Or keep a token on one machine only: `cd ~/Documents/mb-rota && python3 -m rota add work`.
+`python3 -m rota hold <label>` keeps runs off an account (a vault one too), and `use <label>` puts it back.
 
 ## Not yet
 
 - Resident sessions (herdr) start on the machine's own login.
 - Per-model weekly limits (Fable) aren't in Claude Code's stream; the 5-hour and weekly ones are.
-- Tokens in the board's vault instead of a local file; Codex and Gemini accounts (MB-45).
+- Codex and Gemini accounts (MB-45).
 
 ## Tests
 

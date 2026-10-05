@@ -1,7 +1,7 @@
 [extension]
 id = "rota"
 name = "Rota"
-version = "0.1.0"
+version = "0.2.0"
 publisher = "aurelio"
 summary = "Claude accounts taken in turns: each run starts on the account with the most room left."
 node = ">=0.1,<1"
@@ -13,6 +13,7 @@ runtime = "python3.12"
 
 [permissions]
 network = true
+secrets = ["rota.*"]             # each account's token, kept in the vault as rota.<label>
 
 # the node asks rota which account each Claude Code run starts on, and tells it the account's limits after
 [sessions]

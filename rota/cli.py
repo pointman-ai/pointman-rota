@@ -8,10 +8,12 @@ import sys
 
 from rota import accounts
 
-USAGE = """python3 -m rota add <label>     add an account: paste the token `claude setup-token` printed
+USAGE = """Accounts are best kept in the board's vault as rota.<label> (from the apps, or `mb vault store`).
+On this machine only:
+python3 -m rota add <label>     add an account: paste the token `claude setup-token` printed
 python3 -m rota remove <label>  take one out
-python3 -m rota hold <label>    keep runs off it for now (use: put it back)
-python3 -m rota list            the accounts (never their tokens)"""
+python3 -m rota hold <label>    keep runs off it for now, a vault one too (use: put it back)
+python3 -m rota list            the accounts in this machine's file (never their tokens)"""
 
 
 def main(argv: list[str]) -> int:
@@ -40,8 +42,11 @@ def main(argv: list[str]) -> int:
         accounts.save_store(store)
         print(f"added {label}. Rota checks it within a minute; `mb health` shows how full it is.")
         return 0
+    if named is None and cmd in ("hold", "use"):      # an account kept in the vault: held here by its label
+        named = {"label": label}
+        store["accounts"].append(named)
     if named is None:
-        print(f"no account {label!r}", file=sys.stderr)
+        print(f"no account {label!r} in this machine's file", file=sys.stderr)
         return 1
     if cmd == "remove":
         store["accounts"] = [a for a in store["accounts"] if a["label"] != label]

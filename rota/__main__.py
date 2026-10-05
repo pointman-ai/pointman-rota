@@ -21,6 +21,53 @@ from rota import accounts, probe
 ext = Extension()
 lock = threading.Lock()
 state: dict = {"seen": {}, "current": None}
+LIST_SECONDS = 60           # how often the vault's rota.* names are looked at
+OPEN_SECONDS = 1800         # how long an opened token is kept before it's opened again (each open is logged)
+vault: dict = {"listed": 0.0, "names": [], "opened": {}, "said": None}
+vault_lock = threading.Lock()
+
+
+def vault_tokens() -> dict[str, str]:
+    """The accounts kept in the board's vault as `rota.<label>`, for this machine: their names listed
+    and each token opened through the node, which only lets rota see rota.* (MB-106)."""
+    now = time.time()
+    with vault_lock:
+        if now - vault["listed"] > LIST_SECONDS:
+            vault["listed"] = now
+            try:
+                vault["names"] = ext.request("secret.list", {"prefix": "rota."})["names"]
+                vault["said"] = None
+            except RuntimeError as e:          # an older node or core: the local file only
+                if vault["said"] != str(e):
+                    ext.log(f"no accounts from the vault: {e}")
+                    vault["said"] = str(e)
+        names = list(vault["names"])
+    out = {}
+    for name in names:
+        label = name[len("rota."):].lower()
+        if label == accounts.DEFAULT or not accounts.LABEL.fullmatch(label):
+            continue
+        kept = vault["opened"].get(name)
+        if kept is None or now - kept[0] > OPEN_SECONDS:
+            try:
+                found = accounts.TOKEN.search(ext.secret(name))
+            except RuntimeError as e:
+                ext.log(f"couldn't open {name}: {e}")
+                continue
+            kept = vault["opened"][name] = (now, found[0] if found else None)
+        if kept[1]:
+            out[label] = kept[1]
+    return out
+
+
+def all_tokens() -> dict[str, str | None]:
+    """Every account runs may start on: this machine's own login, the vault's, and any in the local
+    file (the vault's win for the same label); none that are held."""
+    store = accounts.load_store()
+    out = accounts.tokens(store)
+    held = {a["label"] for a in store["accounts"] if a.get("held")}
+    out.update({label: token for label, token in vault_tokens().items() if label not in held})
+    return out
 
 
 def state_file() -> Path:
@@ -48,7 +95,7 @@ def threshold() -> float:
 
 def summary() -> dict:
     """What the apps and agents see: labels, how full, when each resets. Never a token."""
-    toks = accounts.tokens(accounts.load_store())
+    toks = all_tokens()
     now = time.time()
     return {"current": state["current"], "threshold": threshold(), "accounts": [
         {"label": label, "own_login": label == accounts.DEFAULT, "used": accounts.used(state["seen"].get(label), now),
@@ -86,7 +133,7 @@ def prepare(p: dict) -> dict:
     machine's own login."""
     if p.get("client") != "claude":
         return {}
-    toks = accounts.tokens(accounts.load_store())
+    toks = all_tokens()
     with lock:
         label = accounts.choose(list(toks), state["seen"], state["current"], threshold())
         if label != state["current"]:
@@ -110,7 +157,7 @@ def health(p: dict) -> list[dict]:
     """Each account as a part under rota in `mb health` and the apps' Machines page."""
     out = []
     now = time.time()
-    for label in accounts.tokens(accounts.load_store()):
+    for label in all_tokens():
         seen = state["seen"].get(label) or {}
         full = accounts.used(seen, now)
         refused = bool(seen.get("needs_auth"))
@@ -138,7 +185,7 @@ def status(job) -> dict:
 
 def check_idle() -> None:
     """Check each account nothing has told rota about lately, one at a time."""
-    toks = accounts.tokens(accounts.load_store())
+    toks = all_tokens()
     every = 60 * float(ext.settings.get("check_minutes") or 30)
     for label, token in toks.items():
         seen = state["seen"].get(label) or {}

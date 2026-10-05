@@ -22,6 +22,7 @@ LIMITS = {"status": "allowed", "rateLimitType": "five_hour", "resetsAt": 4102444
           "unifiedWindows": {"five_hour": {"resetsAt": 4102444800, "utilization": 0.46},
                              "seven_day": {"resetsAt": 4102444800, "utilization": 0.37}}}
 WORK = "sk-ant-oat01-" + "w" * 40
+SPARE = "sk-ant-oat01-" + "s" * 40
 
 
 def seen(five, week=0.0, **kw):
@@ -84,6 +85,9 @@ def test_the_cli_keeps_tokens_for_this_user_only(tmp_path):
     assert cli("add", "default", store=store, stdin=WORK + "\n").returncode == 2
     cli("remove", "work", store=store)
     assert accounts.load_store(store)["accounts"] == []
+    # an account kept in the vault is held here by its label alone
+    assert cli("hold", "spare", store=store).returncode == 0
+    assert accounts.load_store(store)["accounts"] == [{"label": "spare", "held": True}]
 
 
 # ------------------------------------------------------------ under the node's own host
@@ -116,9 +120,12 @@ def host(tmp_path):
     store = tmp_path / "rota.json"
     bad = "sk-ant-oat01-" + "bad" * 10
     accounts.save_store({"accounts": [{"label": "work", "token": WORK}, {"label": "old", "token": bad}]}, store)
+    # the board's vault, as the node shows it to rota: the names rota.* covers, and their values
+    held = {"rota.spare": f"CLAUDE_CODE_OAUTH_TOKEN={SPARE}\n", "rota.Not A Label": SPARE}
     h = ExtensionHost(ROOT, node="studio", machine="studio", state_dir=tmp_path / "state",
                       env={"PATH": f"{bin_}:{os.environ['PATH']}", "ROTA_STORE": str(store),
-                           "FAKE_CALLS": str(tmp_path / "calls")})
+                           "FAKE_CALLS": str(tmp_path / "calls")},
+                      secrets=lambda name: held[name], secret_names=lambda prefix: sorted(held))
     h.start()
     assert h.wait_ready(20), h.error
     yield h
@@ -140,16 +147,24 @@ def test_rota_on_a_node(host, tmp_path):
     assert got["default"]["why"].startswith("5h 95%")
     assert got["work"]["why"].startswith("5h 20%") and got["work"]["state"] == "ok"
     assert got["old"]["needs"] == ["auth"] and got["old"]["state"] == "failing"
+    # an account kept in the vault, as rota.spare, is one too; a name that isn't a label isn't
+    assert got["spare"]["why"].startswith("5h 20%") and "Not A Label" not in str(got)
     # the machine's own login is past 90%, so runs start on work, with its token
     run = host.call("session.prepare", {"run": 1, "handle": "scene", "client": "claude"})
     assert run == {"env": {"CLAUDE_CODE_OAUTH_TOKEN": WORK}, "account": "work"}
     assert host.call("session.prepare", {"run": 2, "handle": "scene", "client": "codex"}) == {}
-    # a run's own report moves it on: work fills up, and nothing else has room
+    # a run's own report moves it on: work fills up, so runs go to the vault's spare, with its token
     host.call("session.ended", {"run": 1, "account": "work", "status": "done", "error": None, "limits": {
         "status": "allowed", "unifiedWindows": {"five_hour": {"utilization": 0.97, "resetsAt": 4102444800}}}})
-    assert host.call("session.prepare", {"run": 3, "client": "claude"})["account"] == "work"
+    assert host.call("session.prepare", {"run": 3, "client": "claude"}) == {
+        "env": {"CLAUDE_CODE_OAUTH_TOKEN": SPARE}, "account": "spare"}
+    # and spare full too: nothing else has room, so they stay put
+    host.call("session.ended", {"run": 3, "account": "spare", "status": "done", "error": None, "limits": {
+        "status": "allowed", "unifiedWindows": {"five_hour": {"utilization": 0.95, "resetsAt": 4102444800}}}})
+    assert host.call("session.prepare", {"run": 4, "client": "claude"})["account"] == "spare"
     status = host.run("rota.status", {}).result
-    assert status["current"] == "work" and WORK not in json.dumps(status)
-    assert [a["label"] for a in status["accounts"]] == ["default", "work", "old"]
+    assert status["current"] == "spare" and WORK not in json.dumps(status)
+    assert [a["label"] for a in status["accounts"]] == ["default", "work", "old", "spare"]
+    assert SPARE not in json.dumps(status)
     fixed = host.call("health.fix", {"part": "old", "action": "auth"})
     assert "claude setup-token" in fixed["message"] and "python3 -m rota add old" in fixed["message"]
