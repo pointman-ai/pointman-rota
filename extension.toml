@@ -1,0 +1,50 @@
+[extension]
+id = "rota"
+name = "Rota"
+version = "0.1.0"
+publisher = "aurelio"
+summary = "Claude accounts taken in turns: each run starts on the account with the most room left."
+node = ">=0.1,<1"
+platforms = ["macos-arm64", "macos-x86_64", "linux-x86_64", "linux-arm64"]
+
+[run]
+command = ["python", "-m", "rota"]
+runtime = "python3.12"
+
+[permissions]
+network = true
+
+# the node asks rota which account each Claude Code run starts on, and tells it the account's limits after
+[sessions]
+env = ["CLAUDE_CODE_OAUTH_TOKEN"]
+
+[settings]
+type = "object"
+
+[settings.properties.threshold]
+type = "integer"
+minimum = 50
+maximum = 100
+default = 90
+description = "Move new runs off an account once either window is this full (%)"
+
+[settings.properties.check_minutes]
+type = "integer"
+minimum = 5
+default = 30
+description = "How often an account nothing has run on is checked, with a one-line Haiku run"
+
+[[commands]]
+kind = "rota.status"
+title = "Accounts and their limits"
+params = { type = "object", properties = {} }
+
+[[tools]]
+name = "rota_status"
+command = "rota.status"
+description = "This machine's Claude accounts: how full each one's 5-hour and weekly windows are, when they reset, and which one new runs start on."
+returns = "result"
+
+[[events]]
+name = "rota.accounts"
+description = "Each account's 5-hour and weekly use, when each resets, and which one runs start on"
