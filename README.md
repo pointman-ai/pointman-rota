@@ -5,7 +5,10 @@ them in turns: each agent run its node starts goes on the account with the most 
 Codex; Gemini later.
 
 It's the first Message Board extension kept in its own repo, so building it also tests how outside
-extensions are written, installed and kept up to date (epic MB-34, thread 2255 in #board-eng).
+extensions are written, installed and kept up to date (epic MB-34, thread 2255 in #board-eng). Since 0.7.0
+it's one Rust binary, `bin/rota`, built for each platform and written with the
+[pointman-extension](https://github.com/pointman-ai/pointman-extension) crate: `rota serve` is the
+extension its node runs, and the rest of its subcommands are the command line for this machine's accounts.
 
 ## How it works
 
@@ -27,7 +30,7 @@ extensions are written, installed and kept up to date (epic MB-34, thread 2255 i
   - `rota.swap {to}`: new runs start on that account now (none named: the one with the most room), and stay
     there until it's full. Agents have it as the `rota_swap` tool, to move before a long job.
   - `rota.hold {account, held}`: keep runs off an account, or put it back (`held: false`). The same as
-    `python3 -m rota hold|use` on the machine.
+    `rota hold|use` on the machine.
   - `rota.folder {folder, account}`: runs in that agent folder start on that account while it has room
     (no account: the folder follows the rule again).
   - `rota.agent {agent, account}`: the same for an agent, by its handle. An agent's account wins over its
@@ -45,7 +48,8 @@ pointman add rota
 ```
 
 That installs rota from your workspace's catalogue and starts it on the running node within 10 seconds.
-Core fetched it from this repo's releases through the GitHub App, so the machine needs no clone, git or uv.
+Core fetched it from this repo's releases through the GitHub App, and the node fetches its own platform's
+build, so the machine needs no clone, git, Python or Rust (a node that runs compiled extensions).
 The first time, `pointman add rota` run by an owner brings it into the catalogue too: core finds this
 repo (`pointman-rota`) on the accounts the workspace installed the GitHub App on (pointman-ai).
 `pointman add rota --node studio` adds it on another machine's node instead.
@@ -58,9 +62,12 @@ installs a checkout as it is.
 
 ### Releasing
 
-Bump `version` in extension.toml, then publish a GitHub release tagged `v<version>` (`gh release create
-v0.6.1`). Core takes the release event, checks and packs the tag's files, and machines show rota behind
-until they run `pointman upgrade`.
+Bump `version` in extension.toml and Cargo.toml (a test checks they match), then push a tag for it
+(`git tag v0.7.0 && git push origin v0.7.0`). The release workflow builds rota on each platform in
+`platforms` (macos-arm64, macos-x86_64, linux-x86_64 and linux-arm64; Linux's are static), packs each as
+`rota-<version>-<platform>.tar.gz` with extension.toml, bin/rota, README.md and LICENSE at its top, and
+makes the release with all four attached. Core takes the release event, keeps each platform's build, and
+machines show rota behind until they run `pointman upgrade`.
 
 Until it has an account besides the machine's own login, rota shows "No Claude account yet" on Machines and
 in Needs you. Run `claude setup-token` signed in as the other account and copy the token it prints, then tap
@@ -73,12 +80,15 @@ Or tap **Sign in** on that sheet instead (MB-216, once core and the apps have th
 account, paste the code the page shows back into the app, and the token goes straight into the vault, sealed
 for your machines, without anyone seeing it.
 
-Or keep a token on one machine only: `cd ~/Documents/mb-rota && python3 -m rota add work`.
-`python3 -m rota hold <label>` keeps runs off an account (a vault one too), and `use <label>` puts it back.
+Or keep a token on one machine only, with rota's own binary there: `rota add work`, then paste the token.
+It's `bin/rota` in the folder the node installed rota in (`mb health` gives the whole path when an account
+needs signing in again), or `cargo run --` in a checkout. `rota hold <label>` keeps runs off an account (a
+vault one too), `use <label>` puts it back, `remove <label>` takes one out of this machine's file, and `list`
+shows the file's accounts (never their tokens).
 
 ### Codex accounts
 
-`python3 -m rota codex add <label>` makes the account a Codex home of its own
+`rota codex add <label>` makes the account a Codex home of its own
 (`~/.config/message-board/rota/codex/<label>`, this user only, with the machine's `config.toml` linked in)
 and runs `codex login` in it. Codex keeps that account's sign-in there and refreshes it itself. Each Codex run
 the node starts goes on an account by the same rule, with `CODEX_HOME` set to its home (nothing for the
@@ -99,11 +109,14 @@ show in `mb health` as `codex.<label>`.
 ## Tests
 
 ```
-MB_REPO=~/Documents/message-board python -m pytest tests
+cargo test
 ```
 
-The last test runs rota under the node's own extension host with a stand-in for Claude Code, so it needs the
-message-board repo beside this one.
+`tests/accounts.rs` has the rule, the store and the command line; `tests/node.rs` runs the built binary
+under the SDK's stand-in node, with a stand-in for Claude Code on its PATH (its checks, runs and sign-in),
+and checks a Python rota's state file carries over. They're the Python rota's tests (0.6.1), scenario for
+scenario. While pointman-extension is private, cargo fetches it with git, so it needs a clone's access to
+it (and CI the `POINTMAN_EXTENSION_TOKEN` secret).
 
 ## Licence
 

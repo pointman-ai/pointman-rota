@@ -1,0 +1,26 @@
+name: Test
+
+on:
+  push:
+    branches: [main, rust]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+    runs-on: ${{ matrix.os }}
+    env:
+      SDK_TOKEN: ${{ secrets.POINTMAN_EXTENSION_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      # the SDK's repo, while it's private: a token that can read it, as the POINTMAN_EXTENSION_TOKEN secret
+      - if: env.SDK_TOKEN != ''
+        run: git config --global url."https://x-access-token:${SDK_TOKEN}@github.com/pointman-ai/".insteadOf "https://github.com/pointman-ai/"
+      - name: Test
+        run: |
+          cargo fmt --check
+          cargo clippy --all-targets --locked -- -D warnings
+          cargo test --locked
