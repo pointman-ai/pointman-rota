@@ -120,8 +120,10 @@ fn cloexec(fd: libc::c_int) {
 fn pty() -> io::Result<(OwnedFd, OwnedFd)> {
     let (mut ours, mut theirs) = (0, 0);
     let mut size = libc::winsize { ws_row: 50, ws_col: 4000, ws_xpixel: 0, ws_ypixel: 0 };
+    // (a raw pointer: macOS's openpty takes *mut winsize, Linux's *const, and *mut passes as either)
+    let size: *mut libc::winsize = &mut size;
     // SAFETY: openpty fills two fds, which are owned from here on
-    if unsafe { libc::openpty(&mut ours, &mut theirs, std::ptr::null_mut(), std::ptr::null_mut(), &mut size) } != 0 {
+    if unsafe { libc::openpty(&mut ours, &mut theirs, std::ptr::null_mut(), std::ptr::null_mut(), size) } != 0 {
         return Err(io::Error::last_os_error());
     }
     cloexec(ours);
