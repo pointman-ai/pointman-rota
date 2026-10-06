@@ -203,11 +203,21 @@ def test_swapping_holding_and_folders(host, tmp_path):
     assert host.run("rota.swap", {}).result["current"] in ("work", "spare")
 
     # held, an account is left out until it's put back; the machine's own login can't be
-    assert host.run("rota.hold", {"account": "spare"}).result["message"] == "runs stay off spare"
-    assert "spare" not in [a["label"] for a in host.run("rota.status", {}).result["accounts"]]
+    got = host.run("rota.hold", {"account": "spare"}).result
+    assert got["message"] == "runs stay off spare"
+    # still listed, so the apps have a row to put it back from (loupe, thread 2255 [3517])
+    rows = {a["label"]: a for a in got["accounts"]}
+    assert rows["spare"]["held"] is True and rows["spare"]["line"].endswith("held: runs stay off it")
+    assert rows["work"]["held"] is False
+    assert {p["id"]: p["state"] for p in host.call("health.check", {})}["spare"] == "stopped"
     assert host.call("session.prepare", {"run": 3, "client": "claude"})["account"] == "work"
+    with pytest.raises(Exception, match="held"):
+        host.run("rota.swap", {"to": "spare"})
     host.run("rota.hold", {"account": "spare", "held": False})
-    assert "spare" in [a["label"] for a in host.run("rota.status", {}).result["accounts"]]
+    rows = {a["label"]: a for a in host.run("rota.status", {}).result["accounts"]}
+    assert rows["spare"]["held"] is False
+    assert host.run("rota.hold", {"account": "gone"}).result["message"] == "runs stay off gone"
+    assert "gone" not in [a["label"] for a in host.run("rota.status", {}).result["accounts"]]   # no token anywhere
     with pytest.raises(Exception, match="can't be held"):
         host.run("rota.hold", {"account": "default"})
 

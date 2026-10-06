@@ -72,6 +72,14 @@ def all_tokens() -> dict[str, str | None]:
     return out
 
 
+def held_labels(toks: dict) -> list[str]:
+    """Accounts held out (`rota.hold`) that have a token somewhere: listed with `held`, never picked, so
+    the apps keep a row to put one back from (loupe, thread 2255 [3517])."""
+    store = accounts.load_store()
+    have = set(vault_tokens()) | {a["label"] for a in store["accounts"] if isinstance(a.get("token"), str)}
+    return [a["label"] for a in store["accounts"] if a.get("held") and a["label"] in have and a["label"] not in toks]
+
+
 def state_file() -> Path:
     return Path(ext.node.get("state_dir") or ".") / "rota.json"
 
@@ -128,17 +136,19 @@ def moved(was: str | None, to: str, why: str) -> None:
 
 
 def summary() -> dict:
-    """What the apps and agents see: labels, how full, when each resets. Never a token."""
+    """What the apps and agents see: labels, how full, when each resets, and which are held. Never a token."""
     toks = all_tokens()
     now = time.time()
     cx = state["codex"]
     return {"current": state["current"], "threshold": threshold(), "folders": dict(state["folders"]),
             "agents": dict(state["agents"]), "moves": list(state["moves"]), "accounts": [
-        {"label": label, "own_login": label == accounts.DEFAULT, "used": accounts.used(state["seen"].get(label), now),
+        {"label": label, "own_login": label == accounts.DEFAULT, "held": held,
+         "used": accounts.used(state["seen"].get(label), now),
          **{k: v for k, v in (state["seen"].get(label) or {}).items() if k in ("five_hour", "seven_day", "status",
                                                                               "needs_auth", "checked_at")},
-         "line": accounts.describe(label, state["seen"].get(label), state["current"], now)}
-        for label in toks],
+         "line": accounts.describe(label, state["seen"].get(label), state["current"], now)
+                 + (" · held: runs stay off it" if held else "")}
+        for label, held in [(t, False) for t in toks] + [(h, True) for h in held_labels(toks)]],
         "codex": {"current": cx["current"], "accounts": [
             {"label": label, "own_login": label == accounts.DEFAULT, "used": accounts.used(cx["seen"].get(label), now),
              "line": accounts.describe(label, cx["seen"].get(label), cx["current"], now)}
@@ -251,6 +261,9 @@ def health(p: dict) -> list[dict]:
                     "unknown" if full is None else "ok",
                     "needs": ["auth"] if refused else [],
                     "why": why})
+    for label in held_labels(all_tokens()):
+        out.append({"id": label, "kind": "account", "name": f"Claude: {label}", "state": "stopped", "needs": [],
+                    "why": "held: runs stay off it until it's put back (rota.hold with held false)"})
     cx = state["codex"]
     for label in codex.labels(accounts.load_store()):
         seen = cx["seen"].get(label) or {}
@@ -315,8 +328,11 @@ def swap(job) -> dict:
     """New runs start on this account from now on (or, with none named, the one with the most room), and
     stay there until it's full, as after any move."""
     toks = all_tokens()
+    held = held_labels(toks)
     with lock:
         to = label_of(job.params, "to") if job.params.get("to") else accounts.most_room(list(toks), state["seen"])
+        if to in held:
+            raise ValueError(f"{to} is held: put it back first (rota.hold with held false)")
         if to not in toks:
             raise ValueError(f"no account {to!r} to start runs on here: {', '.join(toks)}")
         if (state["seen"].get(to) or {}).get("needs_auth"):
