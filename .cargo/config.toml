@@ -1,0 +1,3 @@
+# git, not libgit2: it reaches the SDK (pointman-ai/pointman-extension) with the same sign-in as a clone
+[net]
+git-fetch-with-cli = true
