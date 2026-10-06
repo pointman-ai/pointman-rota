@@ -47,7 +47,7 @@ pointman add rota
 That installs rota from your workspace's catalogue and starts it on the running node within 10 seconds.
 Core fetched it from this repo's releases through the GitHub App, so the machine needs no clone, git or uv.
 The first time, `pointman add rota` run by an owner brings it into the catalogue too: core finds this
-repo (`mb-rota`) on the accounts the workspace installed the GitHub App on (pointman-ai).
+repo (`pointman-rota`) on the accounts the workspace installed the GitHub App on (pointman-ai).
 `pointman add rota --node studio` adds it on another machine's node instead.
 
 `pointman upgrade rota` moves it to the newest release once core has it, keeping the running version
