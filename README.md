@@ -24,9 +24,14 @@ extension its node runs, and the rest of its subcommands are the command line fo
   so its cache stays warm, until either window passes 90%. Then they move to the account with the most room,
   if it's at least 10 points under. The run gets that account's token as `CLAUDE_CODE_OAUTH_TOKEN`, or
   nothing for the machine's own login.
-- **Seeing it:** each account is a part under rota in `pointman health` and on the apps' Machines page ("5h 46%
-  (resets 14:30) · week 37% (resets Tue 03:00) · runs start here"). Agents have a `rota_status` tool.
-- **Steering it** (commands, run on a machine like any extension's: agents with `run_on_machine`):
+- **Seeing it:** `/rota usage` in any thread answers with a chart of each account's 5-hour and weekly use, the
+  account runs start on in its title, a line for each, and buttons that move new runs (Pointman's slash
+  commands and blocks, MB-276). The same chart is a panel people can add to the telemetry board
+  (`rota/accounts@<machine>`). Each account is also a part under rota in `pointman health` and on the apps'
+  Machines page ("5h 46% (resets 14:30) · week 37% (resets Tue 03:00) · runs start here"). Agents have a
+  `rota_status` tool.
+- **Steering it** (commands, run on a machine like any extension's: `/rota swap [to]` and
+  `/rota hold <account> [held=false]` in a thread, agents with `run_on_machine`):
   - `rota.swap {to}`: new runs start on that account now (none named: the one with the most room), and stay
     there until it's full. Agents have it as the `rota_swap` tool, to move before a long job.
   - `rota.hold {account, held}`: keep runs off an account, or put it back (`held: false`). The same as
