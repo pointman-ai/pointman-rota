@@ -13,9 +13,9 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
@@ -78,6 +78,11 @@ impl Session {
         screen(&self.raw_text())
     }
 
+    /// The tokens the screen has shown so far, longest first.
+    fn tokens(&self) -> Vec<String> {
+        tokens_shown(&self.raw_text())
+    }
+
     fn write(&self, bytes: &[u8]) -> io::Result<()> {
         let mut at = 0;
         while at < bytes.len() {
@@ -118,7 +123,28 @@ fn failures(text: &str) -> usize {
 /// 2850 [3773]). So this is a small terminal: printable characters, CR, LF, BS, tab, and the cursor
 /// moves and erases (CSI A–H, J, K) Claude Code uses. Colours, modes and links are skipped.
 pub fn screen(raw: &str) -> String {
+    render(raw).0
+}
+
+/// Every token the screen showed at any point, longest first: Claude Code shows the token, then clears
+/// that part of its screen as it finishes, so what's left at the end may not have it (James's second
+/// try, thread 2850 [3787]). A line is looked at before anything erases or overwrites it.
+pub fn tokens_shown(raw: &str) -> Vec<String> {
+    let mut found = render(raw).1;
+    found.sort_by_key(|t| std::cmp::Reverse(t.len()));
+    found.dedup();
+    found
+}
+
+fn render(raw: &str) -> (String, Vec<String>) {
     let ch: Vec<char> = raw.chars().collect();
+    let mut found: Vec<String> = Vec::new();
+    let peek = |row: &Vec<char>, found: &mut Vec<String>| {
+        let line: String = row.iter().collect();
+        if line.contains("sk-ant-") {
+            found.extend(accounts::TOKEN.find_iter(&line).map(|m| m.as_str().to_string()));
+        }
+    };
     let mut rows: BTreeMap<i64, Vec<char>> = BTreeMap::new();
     let (mut r, mut c, mut bottom) = (0i64, 0usize, 0i64);
     let mut i = 0;
@@ -150,23 +176,27 @@ pub fn screen(raw: &str) -> String {
                             'H' | 'f' => (r, c) = (top + n(0) - 1, (n(1) - 1) as usize),
                             'K' => {
                                 let row = rows.entry(r).or_default();
+                                peek(row, &mut found);
                                 match nums.first().copied().unwrap_or(0) {
                                     0 => row.truncate(c),
                                     1 => row.iter_mut().take(c + 1).for_each(|x| *x = ' '),
                                     _ => row.clear(),
                                 }
                             }
-                            'J' => match nums.first().copied().unwrap_or(0) {
-                                0 => {
-                                    rows.entry(r).or_default().truncate(c);
-                                    rows.retain(|k, _| *k <= r);
+                            'J' => {
+                                rows.values().for_each(|row| peek(row, &mut found));
+                                match nums.first().copied().unwrap_or(0) {
+                                    0 => {
+                                        rows.entry(r).or_default().truncate(c);
+                                        rows.retain(|k, _| *k <= r);
+                                    }
+                                    1 => {
+                                        rows.retain(|k, _| *k >= r);
+                                        rows.entry(r).or_default().iter_mut().take(c + 1).for_each(|x| *x = ' ');
+                                    }
+                                    _ => rows.clear(),
                                 }
-                                1 => {
-                                    rows.retain(|k, _| *k >= r);
-                                    rows.entry(r).or_default().iter_mut().take(c + 1).for_each(|x| *x = ' ');
-                                }
-                                _ => rows.clear(),
-                            },
+                            }
                             _ => {}
                         }
                     }
@@ -205,6 +235,9 @@ pub fn screen(raw: &str) -> String {
                 if row.len() <= c {
                     row.resize(c + 1, ' ');
                 }
+                if row[c] != x && row[c] != ' ' {
+                    peek(row, &mut found); // a letter written over another: the line as it was
+                }
                 row[c] = x;
                 c += 1;
                 i += 1;
@@ -212,7 +245,26 @@ pub fn screen(raw: &str) -> String {
         }
         bottom = bottom.max(r);
     }
-    rows.values().map(|row| row.iter().collect::<String>().trim_end().to_string()).collect::<Vec<_>>().join("\n")
+    rows.values().for_each(|row| peek(row, &mut found));
+    let text = rows.values().map(|row| row.iter().collect::<String>().trim_end().to_string()).collect::<Vec<_>>();
+    (text.join("\n").trim_end_matches('\n').to_string(), found)
+}
+
+/// What Claude Code wrote in a sign-in that failed, with its escape codes (they're the point), and the
+/// code and any token taken out.
+fn keep_transcript(dir: &Path, raw: &str, code: &str) {
+    let redacted = accounts::TOKEN.replace_all(raw, "sk-ant-<token>").replace(code, "<code>");
+    let path = dir.join("signin-last.log");
+    let wrote = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&path)
+        .and_then(|mut f| io::Write::write_all(&mut f, redacted.as_bytes()));
+    if let Err(e) = wrote {
+        eprintln!("rota: couldn't keep the sign-in's transcript in {}: {e}", path.display());
+    }
 }
 
 /// The screen's last few lines, for a sign-in that failed: what Claude Code said, never a token.
@@ -304,8 +356,10 @@ impl SignIns {
         Ok(json!({"url": link, "prompt": "Sign in as the account to add, then paste the code the page shows."}))
     }
 
-    /// Give setup-token the code; answer the token as the vault payload. The session ends either way.
-    pub fn code(&self, session_id: &str, code: &str, timeout: Duration) -> anyhow::Result<Value> {
+    /// Give setup-token the code; answer the token as the vault payload. The session ends either way. One
+    /// that fails leaves what Claude Code wrote, codes and tokens taken out, in `keep` (rota's state
+    /// folder) as signin-last.log, readable by this user only, so the next fix needn't be a guess.
+    pub fn code(&self, session_id: &str, code: &str, timeout: Duration, keep: Option<&Path>) -> anyhow::Result<Value> {
         let code = code.trim();
         if !CODE.is_match(code) {
             bail!("that isn't a sign-in code: paste the code the page showed");
@@ -318,14 +372,13 @@ impl SignIns {
             .ok_or_else(|| anyhow!("this sign-in has ended: start it again"))?;
         let before = failures(&s.text());
         s.write(format!("{code}\r").as_bytes())?;
-        let text = s.read(
-            |s| {
-                let t = s.text();
-                accounts::TOKEN.is_match(&t) || failures(&t) > before
-            },
-            timeout,
-        );
-        let Some(token) = accounts::find_token(&text) else {
+        let text = s.read(|s| !s.tokens().is_empty() || failures(&s.text()) > before, timeout);
+        // a moment more, in case the token was still being drawn when it first matched
+        let text = if s.tokens().is_empty() { text } else { s.read(|_| false, Duration::from_millis(500)) };
+        let Some(token) = s.tokens().into_iter().next() else {
+            if let Some(dir) = keep {
+                keep_transcript(dir, &s.raw_text(), code);
+            }
             bail!(if failures(&text) > before {
                 format!("Claude didn't take that code: start the sign-in again ({})", last_said(&text))
             } else {
@@ -370,6 +423,21 @@ mod tests {
     }
 
     #[test]
+    fn a_token_is_caught_even_when_the_screen_clears_it_after() {
+        let token = format!("sk-ant-oat01-{}", "t0K-".repeat(20));
+        // shown under the link, then the whole area below the link erased as Claude Code finishes
+        let erased = format!("https://claude.com/x\r\nPaste code > \r\nYour token:\r\n{token}\r\n\x1b[2K\x1b[1A\x1b[2K\x1b[1A\x1b[2K\x1b[1A\x1b[2K");
+        assert_eq!(screen(&erased), "https://claude.com/x");
+        assert_eq!(tokens_shown(&erased), vec![token.clone()]);
+        // or drawn over by the next frame without an erase
+        let over = format!("{token}\r{}", "x".repeat(token.len()));
+        assert_eq!(tokens_shown(&over), vec![token.clone()]);
+        // or erased with J
+        assert_eq!(tokens_shown(&format!("{token}\r\x1b[J")), vec![token]);
+        assert!(tokens_shown("no token here\x1b[2K").is_empty());
+    }
+
+    #[test]
     fn links_modes_and_erases() {
         let raw = "\x1b]8;id=1;https://x.example/a\x07link\x1b]8;;\x07 here\x1b[?2004h\x1b(B\r\nline two\x1b[5D\x1b[K!";
         assert_eq!(screen(raw), "link here\nlin!");
@@ -393,7 +461,11 @@ fn real_setup_token() {
     let s = SignIns::new(None);
     let got = s.start("t1", Duration::from_secs(60)).unwrap();
     assert!(got["url"].as_str().unwrap().contains("platform.claude.com"));
-    let err = s.code("t1", "fakecode1234567890abcdef#fakestate1234567890", Duration::from_secs(60)).unwrap_err();
+    let keep = tempfile::tempdir().unwrap();
+    let code = "fakecode1234567890abcdef#fakestate1234567890";
+    let err = s.code("t1", code, Duration::from_secs(60), Some(keep.path())).unwrap_err();
+    let kept = fs::read_to_string(keep.path().join("signin-last.log")).unwrap();
+    assert!(kept.contains("OAuth error") && !kept.contains(code)); // (Claude Code shows the code masked anyway)
     println!("{err}");
     assert!(err.to_string().contains("didn't take that code") && err.to_string().contains("Request failed"));
 }

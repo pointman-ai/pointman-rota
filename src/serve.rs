@@ -539,7 +539,9 @@ impl Rota {
 
     /// The code the sign-in page showed: the token comes back for the node to seal into the vault.
     fn sign_in_code(&self, p: &Value) -> anyhow::Result<Value> {
-        self.signins.code(&text(p.get("session")), &text(p.get("code")), Duration::from_secs(120))
+        let dir = text(self.h.node().get("state_dir"));
+        let keep = (!dir.is_empty()).then(|| PathBuf::from(dir));
+        self.signins.code(&text(p.get("session")), &text(p.get("code")), Duration::from_secs(120), keep.as_deref())
     }
 
     /// New runs start on this account from now on (or, with none named, the one with the most room), and
