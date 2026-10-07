@@ -89,18 +89,6 @@ kind = "rota.folder"
 title = "Start a folder's runs on one account"
 params = { type = "object", required = ["folder"], properties = { folder = { type = "string", description = "An agent's folder on this machine." }, account = { type = "string", description = "The account's label; left out, the folder's runs follow the rule again." } } }
 
-[[tools]]
-name = "rota_status"
-command = "rota.status"
-description = "This machine's Claude accounts: how full each one's 5-hour and weekly windows are, when they reset, and which one new runs start on."
-returns = "result"
-
-[[tools]]
-name = "rota_swap"
-command = "rota.swap"
-description = "Start this machine's new Claude runs on another account now (a label, or the one with the most room), e.g. before a long job when the current one is nearly full. Runs already going stay where they are."
-returns = "result"
-
 [[events]]
 name = "rota.accounts"
 description = "Each account's 5-hour and weekly use, when each resets, and which one runs start on"

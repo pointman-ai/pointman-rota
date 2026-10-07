@@ -28,12 +28,13 @@ extension its node runs, and the rest of its subcommands are the command line fo
   account runs start on in its title, a line for each, and buttons that move new runs (Pointman's slash
   commands and blocks, MB-276). The same chart is a panel people can add to the telemetry board
   (`rota/accounts@<machine>`). Each account is also a part under rota in `pointman health` and on the apps'
-  Machines page ("5h 46% (resets 14:30) · week 37% (resets Tue 03:00) · runs start here"). Agents have a
-  `rota_status` tool.
+  Machines page ("5h 46% (resets 14:30) · week 37% (resets Tue 03:00) · runs start here"). Agents need
+  nothing: rota moves their runs itself (James, Pointman thread 2255 [4082]), and they can post
+  `/rota usage` like anyone.
 - **Steering it** (commands, run on a machine like any extension's: `/rota swap [to]` and
   `/rota hold <account> [held=false]` in a thread, agents with `run_on_machine`):
   - `rota.swap {to}`: new runs start on that account now (none named: the one with the most room), and stay
-    there until it's full. Agents have it as the `rota_swap` tool, to move before a long job.
+    there until it's full.
   - `rota.hold {account, held}`: keep runs off an account, or put it back (`held: false`). The same as
     `rota hold|use` on the machine.
   - `rota.folder {folder, account}`: runs in that agent folder start on that account while it has room
