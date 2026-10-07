@@ -64,6 +64,23 @@ struct State {
     moves: Vec<Move>,
     #[serde(default, deserialize_with = "or_default")]
     codex: CodexState,
+    /// The names accounts are shown and typed by, where someone renamed one: its label → the name
+    /// (`/rota rename default james-max`; James, Pointman thread 2255 [4136]). Labels stay as they are,
+    /// so vault items, health ids and the runs' accounts don't change.
+    #[serde(default, deserialize_with = "or_default", skip_serializing_if = "BTreeMap::is_empty")]
+    names: BTreeMap<String, String>,
+}
+
+impl State {
+    /// An account as it's shown: the name it was given, else its label.
+    fn shown(&self, label: &str) -> String {
+        self.names.get(label).cloned().unwrap_or_else(|| label.to_string())
+    }
+
+    /// The label a name someone typed means: the account given that name, else the name as a label.
+    fn label(&self, name: String) -> String {
+        self.names.iter().find(|(_, n)| **n == name).map(|(l, _)| l.clone()).unwrap_or(name)
+    }
 }
 
 /// The vault's rota.* items as this machine last saw them.
@@ -234,32 +251,14 @@ impl Rota {
     }
 
     /// Every account runs may start on: this machine's own login, the vault's, and any in the local file
-    /// (the vault's win for the same label); none that are held.
+    /// (the vault's win for the same label).
     fn all_tokens(&self) -> Tokens {
         let store = accounts::load_store(None);
         let mut out = accounts::tokens(&store);
         for (label, token) in self.vault_tokens() {
-            if !store.accounts.iter().any(|a| a.held() && a.label == label) {
-                accounts::put(&mut out, &label, Some(token));
-            }
+            accounts::put(&mut out, &label, Some(token));
         }
         out
-    }
-
-    /// Accounts held out (`rota.hold`) that have a token somewhere: listed with `held`, never picked, so
-    /// the apps keep a row to put one back from (loupe, thread 2255 [3517]).
-    fn held_labels(&self, toks: &Tokens) -> Vec<String> {
-        let store = accounts::load_store(None);
-        let vault: Vec<String> = self.vault_tokens().into_iter().map(|(l, _)| l).collect();
-        let have = |label: &String| {
-            vault.contains(label) || store.accounts.iter().any(|a| &a.label == label && a.token.is_some())
-        };
-        store
-            .accounts
-            .iter()
-            .filter(|a| a.held() && have(&a.label) && token_of(toks, &a.label).is_none())
-            .map(|a| a.label.clone())
-            .collect()
     }
 
     fn state_file(&self) -> PathBuf {
@@ -310,10 +309,10 @@ impl Rota {
         st.moves.drain(..over);
     }
 
-    /// What the apps and agents see: labels, how full, when each resets, and which are held. Never a token.
+    /// What the apps and agents see: each account by the name it's shown by (`label`, and its own label as
+    /// `id`), how full, when each resets. Never a token.
     pub fn summary(&self) -> Value {
         let toks = self.all_tokens();
-        let held = self.held_labels(&toks);
         let store = accounts::load_store(None);
         let codex_labels = codex::labels(&store);
         let now = now();
@@ -321,11 +320,9 @@ impl Rota {
         let current = st.current.as_deref();
         let rows: Vec<Value> = toks
             .iter()
-            .map(|(label, _)| (label, false))
-            .chain(held.iter().map(|label| (label, true)))
-            .map(|(label, held)| {
+            .map(|(label, _)| {
                 let seen = st.seen.get(label);
-                let mut row = json!({"label": label, "own_login": label == DEFAULT, "held": held,
+                let mut row = json!({"label": st.shown(label), "id": label, "own_login": label == DEFAULT,
                                      "used": accounts::used(seen, Some(now))});
                 if let Some(Value::Object(known)) = seen.map(|s| serde_json::to_value(s).unwrap_or_default()) {
                     for (k, v) in known {
@@ -334,8 +331,7 @@ impl Rota {
                         }
                     }
                 }
-                let line = accounts::describe(label, seen, current, Some(now));
-                row["line"] = json!(if held { line + " · held: runs stay off it" } else { line });
+                row["line"] = json!(accounts::describe(label, seen, current, Some(now)));
                 row
             })
             .collect();
@@ -348,8 +344,17 @@ impl Rota {
                        "line": accounts::describe(label, seen, cx.current.as_deref(), Some(now))})
             })
             .collect();
-        json!({"current": st.current, "threshold": self.threshold(), "folders": st.folders, "agents": st.agents,
-               "moves": st.moves, "accounts": rows, "codex": {"current": cx.current, "accounts": codex_rows}})
+        let named = |m: &BTreeMap<String, String>| -> BTreeMap<String, String> {
+            m.iter().map(|(k, label)| (k.clone(), st.shown(label))).collect()
+        };
+        let moves: Vec<Move> = st
+            .moves
+            .iter()
+            .map(|m| Move { from: m.from.as_deref().map(|l| st.shown(l)), to: st.shown(&m.to), ..m.clone() })
+            .collect();
+        json!({"current": current.map(|c| st.shown(c)), "threshold": self.threshold(), "folders": named(&st.folders),
+               "agents": named(&st.agents), "moves": moves, "accounts": rows,
+               "codex": {"current": cx.current, "accounts": codex_rows}})
     }
 
     fn tell(&self) {
@@ -357,7 +362,7 @@ impl Rota {
     }
 
     /// A summary with a message for the person who asked, and what the apps draw for it: a button on
-    /// `/rota usage` runs swap or hold, and its answer replaces that post's blocks (MB-276).
+    /// `/rota usage` runs a swap, and its answer replaces that post's blocks (MB-276).
     fn answer(&self, message: String) -> Value {
         let mut out = self.summary();
         out["message"] = json!(message);
@@ -496,7 +501,6 @@ impl Rota {
     /// Each account as a part under rota in `pointman health` and the apps' Machines page.
     fn health(&self) -> Value {
         let toks = self.all_tokens();
-        let held = self.held_labels(&toks);
         let codex_labels = codex::labels(&accounts::load_store(None));
         let now = now();
         let st = self.state();
@@ -510,13 +514,9 @@ impl Rota {
                     why += &format!(" since {} ({})", util::local_time(last.at, "%H:%M"), last.why);
                 }
             }
-            out.push(json!({"id": label, "kind": "account", "name": format!("Claude: {label}"),
+            out.push(json!({"id": label, "kind": "account", "name": format!("Claude: {}", st.shown(label)),
                             "state": part_state(&seen, full), "needs": if seen.refused() { vec!["auth"] } else { vec![] },
                             "why": why}));
-        }
-        for label in held {
-            out.push(json!({"id": label, "kind": "account", "name": format!("Claude: {label}"), "state": "stopped",
-                            "needs": [], "why": "held: runs stay off it until it's put back (rota.hold with held false)"}));
         }
         for label in codex_labels {
             let seen = st.codex.seen.get(&label).cloned().unwrap_or_default();
@@ -562,30 +562,27 @@ impl Rota {
     /// stay there until it's full, as after any move.
     fn swap(&self, params: &Value) -> anyhow::Result<Value> {
         let toks = self.all_tokens();
-        let held = self.held_labels(&toks);
         let was = {
             let mut st = self.state();
             let labels: Vec<String> = toks.iter().map(|(l, _)| l.clone()).collect();
             let to = if truthy(params.get("to")) {
-                label_of(params, "to")?
+                st.label(label_of(params, "to")?)
             } else {
                 accounts::most_room(&labels, &st.seen, None).unwrap_or_default()
             };
-            if held.contains(&to) {
-                bail!("{to} is held: put it back first (rota.hold with held false)");
-            }
             if token_of(&toks, &to).is_none() {
-                bail!("no account '{to}' to start runs on here: {}", labels.join(", "));
+                let names: Vec<String> = labels.iter().map(|l| st.shown(l)).collect();
+                bail!("no account '{}' to start runs on here: {}", st.shown(&to), names.join(", "));
             }
             if st.seen.get(&to).is_some_and(Seen::refused) {
-                bail!("{to}'s token was refused: sign it in again first");
+                bail!("{}'s token was refused: sign it in again first", st.shown(&to));
             }
             let was = st.current.replace(to.clone());
             if was.as_ref() != Some(&to) {
                 self.moved(&mut st, was.clone(), &to, "asked".into());
             }
             self.save_state(&st);
-            (was, to)
+            (was.map(|w| st.shown(&w)), st.shown(&to))
         };
         self.tell();
         let (was, to) = was;
@@ -593,16 +590,35 @@ impl Rota {
         Ok(self.answer(format!("New runs on {} start on {to}{since}", self.machine())))
     }
 
-    /// Keep runs off an account until it's put back (`use`): its token stays where it is.
-    fn hold(&self, params: &Value) -> anyhow::Result<Value> {
-        let label = label_of(params, "account")?;
-        if label == DEFAULT {
-            bail!("the machine's own login can't be held: it's what runs fall back to");
-        }
-        let held = params.get("held") != Some(&Value::Bool(false));
-        accounts::hold(&label, held, None)?;
+    /// Give an account the name it's shown and typed by (`/rota rename default james-max`; James, Pointman
+    /// thread 2255 [4136]). Its label stays, so its vault item and what's kept about it don't change; the
+    /// name its label had is free again once it has another.
+    fn rename(&self, params: &Value) -> anyhow::Result<Value> {
+        let toks = self.all_tokens();
+        let from_name = label_of(params, "from")?;
+        let to = label_of(params, "to")?;
+        let (was, now) = {
+            let mut st = self.state();
+            let label = st.label(from_name.clone());
+            if token_of(&toks, &label).is_none() {
+                let names: Vec<String> = toks.iter().map(|(l, _)| st.shown(l)).collect();
+                bail!("no account '{from_name}' here: {}", names.join(", "));
+            }
+            let taken = toks.iter().any(|(l, _)| l != &label && (st.shown(l) == to || *l == to));
+            if taken {
+                bail!("another account here is called {to}: pick another name");
+            }
+            let was = st.shown(&label);
+            if to == label {
+                st.names.remove(&label);
+            } else {
+                st.names.insert(label.clone(), to.clone());
+            }
+            self.save_state(&st);
+            (was, st.shown(&label))
+        };
         self.tell();
-        Ok(self.answer(if held { format!("runs stay off {label}") } else { format!("{label} is back in turn") }))
+        Ok(self.answer(format!("{was} is called {now} now")))
     }
 
     /// An agent's runs start on this account while it has room (none named: back to the rule).
@@ -612,15 +628,17 @@ impl Rota {
         if handle.is_empty() || !accounts::is_label(&short) {
             bail!("agent: its handle, like scene");
         }
-        let label = if truthy(params.get("account")) { Some(label_of(params, "account")?) } else { None };
-        {
+        let named = if truthy(params.get("account")) { Some(label_of(params, "account")?) } else { None };
+        let label = {
             let mut st = self.state();
+            let label = named.map(|n| st.label(n));
             match &label {
                 Some(label) => st.agents.insert(handle.clone(), label.clone()),
                 None => st.agents.remove(&handle),
             };
             self.save_state(&st);
-        }
+            label.map(|l| st.shown(&l))
+        };
         self.tell();
         Ok(self.answer(match label {
             Some(label) => format!("@{handle}'s runs start on {label}"),
@@ -633,15 +651,17 @@ impl Rota {
         let Some(key) = folder_key(params.get("folder")) else {
             bail!("folder: an agent's folder on this machine");
         };
-        let label = if truthy(params.get("account")) { Some(label_of(params, "account")?) } else { None };
-        {
+        let named = if truthy(params.get("account")) { Some(label_of(params, "account")?) } else { None };
+        let label = {
             let mut st = self.state();
+            let label = named.map(|n| st.label(n));
             match &label {
                 Some(label) => st.folders.insert(key.clone(), label.clone()),
                 None => st.folders.remove(&key),
             };
             self.save_state(&st);
-        }
+            label.map(|l| st.shown(&l))
+        };
         self.tell();
         Ok(self.answer(match label {
             Some(label) => format!("runs in {key} start on {label}"),
@@ -687,7 +707,7 @@ pub fn serve() -> anyhow::Result<()> {
         ("rota.status", |r, _| Ok(r.summary())),
         ("rota.usage", |r, _| Ok(r.usage())),
         ("rota.swap", Rota::swap),
-        ("rota.hold", Rota::hold),
+        ("rota.rename", Rota::rename),
         ("rota.agent", Rota::agent),
         ("rota.folder", Rota::folder),
     ];

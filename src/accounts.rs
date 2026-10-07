@@ -43,14 +43,13 @@ pub fn find_token(s: &str) -> Option<String> {
     TOKEN.find(s).map(|m| m.as_str().to_string())
 }
 
-/// One account in this machine's file: its label, its token if it's kept here, and whether it's held.
+/// One account in this machine's file: its label and its token if it's kept here. (A `held` from before
+/// 0.9.0 stays in `rest`: holding is gone, James, Pointman thread 2255 [4136].)
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 pub struct Account {
     pub label: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub held: Option<bool>,
     #[serde(flatten)]
     pub rest: Map<String, Value>,
 }
@@ -58,10 +57,6 @@ pub struct Account {
 impl Account {
     pub fn new(label: &str) -> Self {
         Account { label: label.to_string(), ..Default::default() }
-    }
-
-    pub fn held(&self) -> bool {
-        self.held == Some(true)
     }
 }
 
@@ -109,21 +104,11 @@ pub fn save_store(store: &Store, path: Option<&Path>) -> std::io::Result<()> {
     fs::rename(&tmp, &path)
 }
 
-/// Keep runs off an account, or put it back in turn. One kept in the vault is held here by its label.
-pub fn hold(label: &str, held: bool, path: Option<&Path>) -> std::io::Result<()> {
-    let mut store = load_store(path);
-    match store.accounts.iter_mut().find(|a| a.label == label) {
-        Some(named) => named.held = Some(held),
-        None => store.accounts.push(Account { held: Some(held), ..Account::new(label) }),
-    }
-    save_store(&store, path)
-}
-
 /// Each usable account's token, in order: this machine's own login first (no token).
 pub fn tokens(store: &Store) -> Vec<(String, Option<String>)> {
     let mut out = vec![(DEFAULT.to_string(), None)];
     for a in &store.accounts {
-        if let (false, true, Some(token)) = (a.held(), a.label != DEFAULT, &a.token) {
+        if let (true, Some(token)) = (a.label != DEFAULT, &a.token) {
             put(&mut out, &a.label, Some(token.clone()));
         }
     }

@@ -1,4 +1,4 @@
-//! `rota add|remove|hold|use|list`: this machine's accounts, kept where only its user can read them. A
+//! `rota add|remove|list`: this machine's accounts, kept where only its user can read them. A
 //! token is pasted here, never sent through the board.
 
 use std::io::{self, BufRead, Write};
@@ -11,7 +11,6 @@ const USAGE: &str =
 On this machine only:
 rota add <label>        add an account: paste the token `claude setup-token` printed
 rota remove <label>     take one out
-rota hold <label>       keep runs off it for now, a vault one too (use: put it back)
 rota list               the accounts in this machine's file (never their tokens)
 rota codex add <label>  a Codex account: signed in with `codex login` in a Codex home of its own";
 
@@ -49,11 +48,11 @@ pub fn main(argv: &[String]) -> i32 {
     if cmd == "list" {
         println!("{DEFAULT}  (this machine's own Claude login)");
         for a in &store.accounts {
-            println!("{}{}", a.label, if a.held() { "  (held)" } else { "" });
+            println!("{}", a.label);
         }
         return 0;
     }
-    if !["add", "remove", "hold", "use"].contains(&cmd) || label.is_empty() {
+    if !["add", "remove"].contains(&cmd) || label.is_empty() {
         eprintln!("{USAGE}");
         return 2;
     }
@@ -76,9 +75,6 @@ pub fn main(argv: &[String]) -> i32 {
                 println!("added {label}. Rota checks it within a minute; `pointman health` shows how full it is.")
             })
         }
-        // one kept in the vault is held here by its label
-        "hold" => accounts::hold(&label, true, None).map(|_| println!("runs stay off {label}")),
-        "use" => accounts::hold(&label, false, None).map(|_| println!("{label} is back in turn")),
         _ if !store.accounts.iter().any(|a| a.label == label) => {
             eprintln!("no account '{label}' in this machine's file");
             return 1;

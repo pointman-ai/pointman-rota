@@ -214,7 +214,7 @@ fn rota_on_a_node() {
 }
 
 #[test]
-fn swapping_holding_and_folders() {
+fn swapping_renaming_and_folders() {
     let host = Host::start();
     host.parts(claude_checked);
     assert_eq!(host.account(json!({"run": 1, "client": "claude"})), "work");
@@ -229,22 +229,34 @@ fn swapping_holding_and_folders() {
     let current = host.run("rota.swap", json!({}))["current"].clone();
     assert!(current == "work" || current == "spare", "{current}");
 
-    // held, an account is left out until it's put back; the machine's own login can't be
-    let got = host.run("rota.hold", json!({"account": "spare"}));
-    assert_eq!(got["message"], "runs stay off spare");
-    // still listed, so the apps have a row to put it back from (loupe, thread 2255 [3517])
+    // renamed (James, Pointman thread 2255 [4136]): shown and typed by the new name, the machine's own
+    // login too; its label, and so the runs' account and the health part's id, stay as they were
+    let got = host.run("rota.rename", json!({"from": "default", "to": "james-max"}));
+    assert_eq!(got["message"], "default is called james-max now");
     let listed = rows(&got);
-    assert_eq!(listed["spare"]["held"], true);
-    assert!(listed["spare"]["line"].as_str().unwrap().ends_with("held: runs stay off it"));
-    assert_eq!(listed["work"]["held"], false);
-    assert_eq!(host.parts(|_| true)["spare"]["state"], "stopped");
-    assert_eq!(host.account(json!({"run": 3, "client": "claude"})), "work");
-    assert!(host.refuses("rota.swap", json!({"to": "spare"})).contains("held"));
-    host.run("rota.hold", json!({"account": "spare", "held": false}));
-    assert_eq!(rows(&host.status())["spare"]["held"], false);
-    assert_eq!(host.run("rota.hold", json!({"account": "gone"}))["message"], "runs stay off gone");
-    assert!(!rows(&host.status()).contains_key("gone")); // no token anywhere
-    assert!(host.refuses("rota.hold", json!({"account": "default"})).contains("can't be held"));
+    assert!(!listed.contains_key("default"));
+    assert_eq!(
+        (listed["james-max"]["id"].clone(), listed["james-max"]["own_login"].clone()),
+        (json!("default"), json!(true))
+    );
+    host.run("rota.rename", json!({"from": "spare", "to": "team"}));
+    assert_eq!(host.run("rota.swap", json!({"to": "team"}))["current"], "team");
+    assert_eq!(host.account(json!({"run": 3, "client": "claude"})), "spare");
+    assert_eq!(host.parts(|_| true)["spare"]["name"], "Claude: team");
+    assert_eq!(host.run("rota.swap", json!({"to": "spare"}))["current"], "team"); // its label still works
+    assert!(host
+        .refuses("rota.rename", json!({"from": "work", "to": "team"}))
+        .contains("another account here is called team"));
+    assert!(host
+        .refuses("rota.rename", json!({"from": "work", "to": "spare"}))
+        .contains("another account here is called spare"));
+    assert!(host.refuses("rota.rename", json!({"from": "gone", "to": "x"})).contains("no account 'gone'"));
+    assert!(host.refuses("rota.rename", json!({"from": "work", "to": "Not A Name"})).contains("to:"));
+    // back to its label: the name goes
+    host.run("rota.rename", json!({"from": "team", "to": "spare"}));
+    host.run("rota.rename", json!({"from": "james-max", "to": "default"}));
+    let listed = rows(&host.status());
+    assert!(listed.contains_key("spare") && listed.contains_key("default") && !listed.contains_key("team"));
 
     // a folder's runs start on its own account, whatever the rule picks for the rest
     let agent = host.path("agent");

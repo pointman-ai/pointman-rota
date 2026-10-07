@@ -45,7 +45,7 @@ pub fn in_use(store: &Store) -> bool {
     util::which("codex").is_some() || !store.codex.is_empty() || own_home().join("auth.json").exists()
 }
 
-/// Each usable Codex account, the machine's own first: the added ones signed in and not held. None on a
+/// Each usable Codex account, the machine's own first: the added ones signed in. None on a
 /// machine without Codex.
 pub fn labels(store: &Store) -> Vec<String> {
     if !in_use(store) {
@@ -53,7 +53,7 @@ pub fn labels(store: &Store) -> Vec<String> {
     }
     let mut out = vec![DEFAULT.to_string()];
     for a in &store.codex {
-        if a.label != DEFAULT && !a.held() && home(&a.label).join("auth.json").exists() {
+        if a.label != DEFAULT && home(&a.label).join("auth.json").exists() {
             out.push(a.label.clone());
         }
     }

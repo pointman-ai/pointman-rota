@@ -134,14 +134,13 @@ fn the_cli_keeps_tokens_for_this_user_only() {
     assert_eq!(stored(&store), json!([{"label": "work", "token": work()}]));
     let out = String::from_utf8(cli(&["list"], &store, "").stdout).unwrap();
     assert!(out.contains("work") && !out.contains(&work()));
-    assert!(cli(&["hold", "work"], &store, "").status.success());
-    assert_eq!(tokens(&store), vec![("default".into(), None)]);
-    cli(&["use", "work"], &store, "");
     assert_eq!(tokens(&store), vec![("default".into(), None), ("work".into(), Some(work()))]);
     assert_eq!(cli(&["add", "default"], &store, &format!("{}\n", work())).status.code(), Some(2));
     cli(&["remove", "work"], &store, "");
     assert_eq!(accounts::load_store(Some(&store)).accounts, vec![]);
-    // an account kept in the vault is held here by its label alone
-    assert!(cli(&["hold", "spare"], &store, "").status.success());
-    assert_eq!(stored(&store), json!([{"label": "spare", "held": true}]));
+    // holding is gone (James, Pointman thread 2255 [4136]): one held before 0.9.0 takes runs again, and
+    // its old `held` stays in the file untouched
+    fs::write(&store, json!({"accounts": [{"label": "work", "token": work(), "held": true}]}).to_string()).unwrap();
+    assert_eq!(tokens(&store), vec![("default".into(), None), ("work".into(), Some(work()))]);
+    assert!(!cli(&["hold", "work"], &store, "").status.success());
 }

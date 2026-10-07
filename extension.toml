@@ -1,7 +1,7 @@
 [extension]
 id = "rota"
 name = "Rota"
-version = "0.8.0"
+version = "0.9.0"
 publisher = "aurelio"
 summary = "Claude accounts taken in turns: each run starts on the account with the most room left."
 node = ">=0.1,<1"
@@ -73,11 +73,11 @@ slash = "swap"
 summary = "Start new runs on another account, or the one with the most room"
 
 [[commands]]
-kind = "rota.hold"
-title = "Keep runs off an account, or put it back"
-params = { type = "object", required = ["account"], properties = { account = { type = "string", description = "The account's label." }, held = { type = "boolean", description = "false puts it back in turn.", default = true } } }
-slash = "hold"
-summary = "Keep runs off an account (held=false puts it back)"
+kind = "rota.rename"
+title = "Rename an account"
+params = { type = "object", required = ["from", "to"], properties = { from = { type = "string", description = "The account's name now (default is this machine's own login)." }, to = { type = "string", description = "Its new name: lowercase letters, digits, . _ -" } } }
+slash = "rename"
+summary = "Rename an account: /rota rename default james-max"
 
 [[commands]]
 kind = "rota.agent"

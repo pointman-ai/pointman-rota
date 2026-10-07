@@ -32,11 +32,12 @@ extension its node runs, and the rest of its subcommands are the command line fo
   nothing: rota moves their runs itself (James, Pointman thread 2255 [4082]), and they can post
   `/rota usage` like anyone.
 - **Steering it** (commands, run on a machine like any extension's: `/rota swap [to]` and
-  `/rota hold <account> [held=false]` in a thread, agents with `run_on_machine`):
+  `/rota rename <name> <new name>` in a thread, agents with `run_on_machine`):
   - `rota.swap {to}`: new runs start on that account now (none named: the one with the most room), and stay
     there until it's full.
-  - `rota.hold {account, held}`: keep runs off an account, or put it back (`held: false`). The same as
-    `rota hold|use` on the machine.
+  - `rota.rename {from, to}`: the name an account is shown and typed by, the machine's own login too
+    (`/rota rename default james-max`). Its label stays, so its vault item doesn't change. Renamed back to
+    its label, the name goes.
   - `rota.folder {folder, account}`: runs in that agent folder start on that account while it has room
     (no account: the folder follows the rule again).
   - `rota.agent {agent, account}`: the same for an agent, by its handle. An agent's account wins over its
@@ -88,9 +89,9 @@ for your machines, without anyone seeing it.
 
 Or keep a token on one machine only, with rota's own binary there: `rota add work`, then paste the token.
 It's `bin/rota` in the folder the node installed rota in (`pointman health` gives the whole path when an account
-needs signing in again), or `cargo run --` in a checkout. `rota hold <label>` keeps runs off an account (a
-vault one too), `use <label>` puts it back, `remove <label>` takes one out of this machine's file, and `list`
-shows the file's accounts (never their tokens).
+needs signing in again), or `cargo run --` in a checkout. `remove <label>` takes one out of this machine's
+file, and `list` shows the file's accounts (never their tokens). An account in the vault goes with
+`pointman secrets remove rota.<label>`. (Holding an account went in 0.9.0: James, Pointman thread 2255 [4136].)
 
 ### Codex accounts
 
@@ -110,7 +111,7 @@ show in `pointman health` as `codex.<label>`.
 - Per-model weekly limits (Fable) aren't in Claude Code's stream; the 5-hour and weekly ones are.
 - Gemini accounts: rota has no source yet for how much of a Gemini account's quota is used, so there's
   nothing to take turns by.
-- Holding a Codex account, or moving Codex runs with `rota.swap`: Claude's only so far.
+- Renaming a Codex account, or moving Codex runs with `rota.swap`: Claude's only so far.
 
 ## Tests
 

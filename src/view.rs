@@ -37,7 +37,7 @@ pub fn view(summary: &Value, message: Option<&str>) -> (String, Value) {
     }
     for a in &accounts {
         let label = a["label"].as_str().unwrap_or_default();
-        if buttons.len() < MAX_BUTTONS && Some(label) != current && a["held"] != true {
+        if buttons.len() < MAX_BUTTONS && Some(label) != current {
             buttons.push(json!({"title": format!("Start runs on {label}"), "command": "rota.swap",
                                 "params": {"to": label}}));
         }
@@ -71,7 +71,7 @@ mod tests {
             {"label": "work", "line": "5h 62% (resets 14:00) · week 31% · runs start here",
              "five_hour": {"used": 62.0, "resets": 1.0}, "seven_day": {"used": 31.0}},
             {"label": "spare", "line": "not checked yet"},
-            {"label": "old", "line": "held", "held": true, "five_hour": {"used": 99.5}}]})
+            {"label": "old", "line": "5h 99%", "five_hour": {"used": 99.5}}]})
     }
 
     #[test]
@@ -88,10 +88,10 @@ mod tests {
         );
         assert_eq!(spec["encoding"]["y"]["format"]["style"], "percent");
         assert_eq!(spec["title"], "Claude accounts · runs start on work");
-        // not the one runs start on, nor a held one
+        // not the one runs start on
         let titles: Vec<&str> =
             blocks[2]["buttons"].as_array().unwrap().iter().map(|b| b["title"].as_str().unwrap()).collect();
-        assert_eq!(titles, ["Swap now", "Start runs on spare"]);
+        assert_eq!(titles, ["Swap now", "Start runs on spare", "Start runs on old"]);
         assert_eq!(blocks[2]["buttons"][1]["params"], json!({"to": "spare"}));
     }
 
