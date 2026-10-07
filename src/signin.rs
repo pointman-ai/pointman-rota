@@ -371,7 +371,11 @@ impl SignIns {
             .remove(session_id)
             .ok_or_else(|| anyhow!("this sign-in has ended: start it again"))?;
         let before = failures(&s.text());
-        s.write(format!("{code}\r").as_bytes())?;
+        // the code, then Enter on its own: Claude Code takes a long input in one go as a paste, and a
+        // pasted Enter doesn't submit (James's 92-character code sat in the field, thread 2850 [3787])
+        s.write(code.as_bytes())?;
+        s.read(|_| false, Duration::from_millis(500));
+        s.write(b"\r")?;
         let text = s.read(|s| !s.tokens().is_empty() || failures(&s.text()) > before, timeout);
         // a moment more, in case the token was still being drawn when it first matched
         let text = if s.tokens().is_empty() { text } else { s.read(|_| false, Duration::from_millis(500)) };
@@ -462,7 +466,9 @@ fn real_setup_token() {
     let got = s.start("t1", Duration::from_secs(60)).unwrap();
     assert!(got["url"].as_str().unwrap().contains("platform.claude.com"));
     let keep = tempfile::tempdir().unwrap();
-    let code = "fakecode1234567890abcdef#fakestate1234567890";
+    // as long as a real one (James's was 92 characters): sent with its Enter in one go, it never submitted
+    let code = format!("{}#{}", "fakecode".repeat(6), "fakestate1".repeat(4));
+    let code = code.as_str();
     let err = s.code("t1", code, Duration::from_secs(60), Some(keep.path())).unwrap_err();
     let kept = fs::read_to_string(keep.path().join("signin-last.log")).unwrap();
     assert!(kept.contains("OAuth error") && !kept.contains(code)); // (Claude Code shows the code masked anyway)
