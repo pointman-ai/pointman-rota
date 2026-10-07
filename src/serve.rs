@@ -115,6 +115,14 @@ fn run_on(label: &str, token: &Option<String>) -> Value {
     json!({"env": env, "account": label})
 }
 
+/// Whether a run was granted claude.ai connectors (the node passes their names as `connectors`): only this
+/// machine's own login loads them.
+fn has_connectors(p: &Value) -> bool {
+    p.get("connectors")
+        .and_then(Value::as_array)
+        .is_some_and(|a| a.iter().any(|v| v.as_str().is_some_and(|s| !s.is_empty())))
+}
+
 /// Whether an account can take a run at all: its token wasn't refused and it isn't full.
 fn takes_runs(seen: Option<&Seen>, now: Option<f64>) -> bool {
     !seen.is_some_and(Seen::refused) && accounts::used(seen, now).unwrap_or(0.0) < 100.0
@@ -411,12 +419,18 @@ impl Rota {
         let toks = self.all_tokens();
         let (label, moved) = {
             let mut st = self.state();
-            // an agent mapped to an account, else its folder, while that account can take runs (cswap's map)
-            let pins =
-                [st.agents.get(&text(p.get("handle"))), folder_key(p.get("folder")).and_then(|k| st.folders.get(&k))];
+            // while the account can take runs: an agent mapped to one (cswap's map); a run granted claude.ai
+            // connectors, on this machine's own login, since a setup token loads none of them (Pointman thread
+            // 1018 [4263]); the agent's folder's account
+            let own = has_connectors(p).then(|| DEFAULT.to_string());
+            let pins = [
+                st.agents.get(&text(p.get("handle"))).cloned(),
+                own,
+                folder_key(p.get("folder")).and_then(|k| st.folders.get(&k)).cloned(),
+            ];
             for pinned in pins.into_iter().flatten() {
-                if let Some(token) = token_of(&toks, pinned).filter(|_| takes_runs(st.seen.get(pinned), None)) {
-                    return Ok(run_on(pinned, token));
+                if let Some(token) = token_of(&toks, &pinned).filter(|_| takes_runs(st.seen.get(&pinned), None)) {
+                    return Ok(run_on(&pinned, token));
                 }
             }
             let (current, now, cooldown) = (st.current.clone(), now(), self.cooldown());

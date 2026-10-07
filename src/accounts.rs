@@ -179,7 +179,10 @@ pub fn windows(limits: Option<&Value>) -> Seen {
     }
     if let Some(status) = limits.get("status").and_then(Value::as_str).filter(|s| !s.is_empty()) {
         out.status = Some(status.to_string());
-        if status != "allowed" {
+        // `allowed_warning` still takes runs: Claude's word that a window passed a mark (the week at 52%),
+        // with that window's reset as `resetsAt`. Read as blocked, it kept an account at half its week out
+        // of the pool until the week reset (Pointman thread 1018 [4263])
+        if !status.starts_with("allowed") {
             out.blocked_until = limits.get("resetsAt").and_then(Value::as_f64).filter(|t| *t != 0.0);
         }
     }

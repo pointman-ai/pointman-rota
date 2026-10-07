@@ -369,6 +369,20 @@ fn moves_cooldown_and_agents() {
         host.call("session.prepare", json!({"run": 7, "handle": "scene", "client": "claude"})),
         json!({"env": {"CLAUDE_CODE_OAUTH_TOKEN": work()}, "account": "work"})
     );
+
+    // a run granted claude.ai connectors starts on this machine's own login (a setup token loads none),
+    // with no token in its environment, while that login can take runs; an agent mapped elsewhere still goes
+    // there, and with the own login full the run goes where any run would
+    let drive = json!(["claude.ai Google Drive"]);
+    assert_eq!(
+        host.call("session.prepare", json!({"run": 8, "handle": "search", "client": "claude", "connectors": drive})),
+        json!({"env": {}, "account": "default"})
+    );
+    assert_eq!(host.account(json!({"run": 9, "handle": "scene", "client": "claude", "connectors": drive})), "work");
+    host.ended("default", "limited", json!("usage limit reached"), over());
+    let anywhere = host.account(json!({"run": 10, "handle": "search", "client": "claude", "connectors": []}));
+    assert_ne!(anywhere, "default");
+    assert_eq!(host.account(json!({"run": 11, "handle": "search", "client": "claude", "connectors": drive})), anywhere);
     assert_eq!(host.run("rota.agent", json!({"agent": "scene"}))["agents"], json!({}));
 }
 

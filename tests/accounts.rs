@@ -62,6 +62,17 @@ fn windows_and_how_full() {
     };
     assert_eq!(accounts::used(Some(&reset), None), Some(20.0));
     assert_eq!(accounts::used(Some(&Seen { blocked_until: Some(RESETS), ..w }), None), Some(100.0));
+    // a warning is still allowed: this is a real run's, the week past a mark at 52%, `resetsAt` its reset
+    let warned = accounts::windows(Some(&json!({
+        "status": "allowed_warning", "resetsAt": 4102444800u64, "rateLimitType": "seven_day", "utilization": 0.52,
+        "unifiedWindows": {"five_hour": {"utilization": 0.28, "resetsAt": 4102444800u64},
+                           "seven_day": {"utilization": 0.52, "resetsAt": 4102444800u64}}})));
+    assert_eq!(warned.blocked_until, None);
+    assert_eq!(accounts::used(Some(&warned), None), Some(52.0));
+    // rejected is over the limit: full until its reset
+    let over = accounts::windows(Some(&json!({"status": "rejected", "resetsAt": 4102444800u64,
+        "unifiedWindows": {"five_hour": {"utilization": 0.3, "resetsAt": 4102444800u64}}})));
+    assert_eq!(accounts::used(Some(&over), None), Some(100.0));
 }
 
 #[test]
