@@ -82,11 +82,15 @@ mod tests {
         let blocks = blocks.as_array().unwrap();
         assert_eq!(blocks[0], json!({"type": "text", "markdown": text}));
         let spec = &blocks[1]["spec"];
-        assert_eq!(spec["data"]["rows"], json!([["work", "5-hour", 0.62], ["work", "weekly", 0.31], ["old", "5-hour", 0.995]]));
+        assert_eq!(
+            spec["data"]["rows"],
+            json!([["work", "5-hour", 0.62], ["work", "weekly", 0.31], ["old", "5-hour", 0.995]])
+        );
         assert_eq!(spec["encoding"]["y"]["format"]["style"], "percent");
         assert_eq!(spec["title"], "Claude accounts · runs start on work");
         // not the one runs start on, nor a held one
-        let titles: Vec<&str> = blocks[2]["buttons"].as_array().unwrap().iter().map(|b| b["title"].as_str().unwrap()).collect();
+        let titles: Vec<&str> =
+            blocks[2]["buttons"].as_array().unwrap().iter().map(|b| b["title"].as_str().unwrap()).collect();
         assert_eq!(titles, ["Swap now", "Start runs on spare"]);
         assert_eq!(blocks[2]["buttons"][1]["params"], json!({"to": "spare"}));
     }
