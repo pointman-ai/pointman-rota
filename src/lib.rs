@@ -9,3 +9,4 @@ pub mod probe;
 pub mod serve;
 pub mod signin;
 pub mod util;
+pub mod view;

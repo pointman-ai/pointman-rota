@@ -139,6 +139,14 @@ fn part_state(seen: &Seen, full: Option<f64>) -> &'static str {
 }
 
 /// This program, as a person on this machine would type it (`~/…/bin/rota`).
+/// A summary with `text` and `blocks` (view.rs) beside its own fields, which MB-44's view reads.
+fn with_view(mut out: Value, message: Option<&str>) -> Value {
+    let (text, blocks) = crate::view::view(&out, message);
+    out["text"] = json!(text);
+    out["blocks"] = blocks;
+    out
+}
+
 fn this_program() -> String {
     let me = std::env::current_exe().map_or_else(|_| "rota".into(), |p| p.to_string_lossy().into_owned());
     match util::env("HOME").and_then(|h| me.strip_prefix(&format!("{h}/")).map(String::from)) {
@@ -348,11 +356,17 @@ impl Rota {
         self.h.event("rota.accounts", self.summary());
     }
 
-    /// A summary with a message for the person who asked.
+    /// A summary with a message for the person who asked, and what the apps draw for it: a button on
+    /// `/rota usage` runs swap or hold, and its answer replaces that post's blocks (MB-276).
     fn answer(&self, message: String) -> Value {
         let mut out = self.summary();
         out["message"] = json!(message);
-        out
+        with_view(out, Some(&message))
+    }
+
+    /// `/rota usage` and the telemetry panel (MB-276): the summary, with its text and blocks.
+    pub fn usage(&self) -> Value {
+        with_view(self.summary(), None)
     }
 
     fn note(&self, label: &str, limits: Option<&Value>, error: Option<String>, refused: bool) {
@@ -669,8 +683,9 @@ pub fn serve() -> anyhow::Result<()> {
         let r = rota.clone();
         ext.method(name, move |p: Value| f(&r, &p));
     }
-    let commands: [(&str, Answer); 5] = [
+    let commands: [(&str, Answer); 6] = [
         ("rota.status", |r, _| Ok(r.summary())),
+        ("rota.usage", |r, _| Ok(r.usage())),
         ("rota.swap", Rota::swap),
         ("rota.hold", Rota::hold),
         ("rota.agent", Rota::agent),

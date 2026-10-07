@@ -59,14 +59,25 @@ title = "Accounts and their limits"
 params = { type = "object", properties = {} }
 
 [[commands]]
+kind = "rota.usage"
+title = "Each account's use"
+params = { type = "object", properties = {} }
+slash = "usage"
+summary = "Each Claude account's 5-hour and weekly use, and which one new runs start on"
+
+[[commands]]
 kind = "rota.swap"
 title = "Start new runs on another account"
 params = { type = "object", properties = { to = { type = "string", description = "The account's label (work); left out, the one with the most room." } } }
+slash = "swap"
+summary = "Start new runs on another account, or the one with the most room"
 
 [[commands]]
 kind = "rota.hold"
 title = "Keep runs off an account, or put it back"
 params = { type = "object", required = ["account"], properties = { account = { type = "string", description = "The account's label." }, held = { type = "boolean", description = "false puts it back in turn.", default = true } } }
+slash = "hold"
+summary = "Keep runs off an account (held=false puts it back)"
 
 [[commands]]
 kind = "rota.agent"
@@ -93,3 +104,10 @@ returns = "result"
 [[events]]
 name = "rota.accounts"
 description = "Each account's 5-hour and weekly use, when each resets, and which one runs start on"
+
+[[panels]]
+id = "accounts"
+title = "Claude accounts"
+description = "How full each account's 5-hour and weekly windows are"
+command = "rota.usage"
+refresh = ["rota.accounts"]
