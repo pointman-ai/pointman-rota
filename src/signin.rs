@@ -9,7 +9,7 @@
 //!   the vault. Nothing here writes it anywhere, logs it or keeps it.
 //! - **A sign-in waits** 15 minutes for its code, then it's dropped.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
@@ -28,8 +28,8 @@ use tempfile::TempDir;
 use crate::{accounts, probe};
 
 pub const WAIT: Duration = Duration::from_secs(15 * 60);
-static ANSI: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[@-Z\\-_]").unwrap());
+/// The terminal's height, as `pty` makes it (cursor moves stop at its top line).
+const ROWS: i64 = 50;
 static LINK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"https://[^\s\x07\x1b\]]+").unwrap());
 static CODE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[A-Za-z0-9#_.~-]{8,512}$").unwrap());
 
@@ -73,8 +73,9 @@ impl Session {
         String::from_utf8_lossy(&self.raw).into_owned()
     }
 
+    /// What the terminal shows now (see `screen`).
     fn text(&self) -> String {
-        ANSI.replace_all(&self.raw_text(), "").into_owned()
+        screen(&self.raw_text())
     }
 
     fn write(&self, bytes: &[u8]) -> io::Result<()> {
@@ -106,9 +107,120 @@ pub fn manual_link(raw: &str) -> Option<String> {
         .map(String::from)
 }
 
-fn failed(text: &str) -> bool {
+fn failures(text: &str) -> usize {
     let low = text.to_lowercase();
-    ["invalid", "error", "failed", "expired"].iter().any(|w| low.contains(w))
+    ["invalid", "error", "failed", "expired"].iter().map(|w| low.matches(w).count()).sum()
+}
+
+/// What a terminal shows for this output. Claude Code redraws only the cells that change and moves the
+/// cursor over the rest, so its text can't be read by dropping the escape codes: a letter already on
+/// screen isn't written again ("Requ", a move, "st" for "Request"; MB-216, James's sign-in in thread
+/// 2850 [3773]). So this is a small terminal: printable characters, CR, LF, BS, tab, and the cursor
+/// moves and erases (CSI A–H, J, K) Claude Code uses. Colours, modes and links are skipped.
+pub fn screen(raw: &str) -> String {
+    let ch: Vec<char> = raw.chars().collect();
+    let mut rows: BTreeMap<i64, Vec<char>> = BTreeMap::new();
+    let (mut r, mut c, mut bottom) = (0i64, 0usize, 0i64);
+    let mut i = 0;
+    while i < ch.len() {
+        match ch[i] {
+            '\x1b' => match ch.get(i + 1) {
+                Some('[') => {
+                    let mut j = i + 2;
+                    while j < ch.len() && !('@'..='~').contains(&ch[j]) {
+                        j += 1;
+                    }
+                    if j >= ch.len() {
+                        break;
+                    }
+                    let params: String = ch[i + 2..j].iter().collect();
+                    let private = params.starts_with(['?', '>', '=', '<']);
+                    let nums: Vec<i64> = params.split(';').map(|p| p.parse().unwrap_or(0)).collect();
+                    let n = |k: usize| nums.get(k).copied().filter(|v| *v > 0).unwrap_or(1);
+                    let top = (bottom - (ROWS - 1)).max(0);
+                    if !private {
+                        match ch[j] {
+                            'A' => r = (r - n(0)).max(top),
+                            'B' => r += n(0),
+                            'C' => c += n(0) as usize,
+                            'D' => c = c.saturating_sub(n(0) as usize),
+                            'E' => (r, c) = (r + n(0), 0),
+                            'F' => (r, c) = ((r - n(0)).max(top), 0),
+                            'G' => c = (n(0) - 1) as usize,
+                            'H' | 'f' => (r, c) = (top + n(0) - 1, (n(1) - 1) as usize),
+                            'K' => {
+                                let row = rows.entry(r).or_default();
+                                match nums.first().copied().unwrap_or(0) {
+                                    0 => row.truncate(c),
+                                    1 => row.iter_mut().take(c + 1).for_each(|x| *x = ' '),
+                                    _ => row.clear(),
+                                }
+                            }
+                            'J' => match nums.first().copied().unwrap_or(0) {
+                                0 => {
+                                    rows.entry(r).or_default().truncate(c);
+                                    rows.retain(|k, _| *k <= r);
+                                }
+                                1 => {
+                                    rows.retain(|k, _| *k >= r);
+                                    rows.entry(r).or_default().iter_mut().take(c + 1).for_each(|x| *x = ' ');
+                                }
+                                _ => rows.clear(),
+                            },
+                            _ => {}
+                        }
+                    }
+                    i = j + 1;
+                }
+                Some(']') => {
+                    let mut j = i + 2;
+                    while j < ch.len() && ch[j] != '\x07' && !(ch[j] == '\x1b' && ch.get(j + 1) == Some(&'\\')) {
+                        j += 1;
+                    }
+                    i = if ch.get(j) == Some(&'\x07') { j + 1 } else { j + 2 };
+                }
+                Some('(' | ')' | '*' | '+') => i += 3,
+                Some(_) => i += 2,
+                None => break,
+            },
+            '\r' => {
+                c = 0;
+                i += 1;
+            }
+            '\n' => {
+                r += 1;
+                i += 1;
+            }
+            '\x08' => {
+                c = c.saturating_sub(1);
+                i += 1;
+            }
+            '\t' => {
+                c = (c / 8 + 1) * 8;
+                i += 1;
+            }
+            x if (x as u32) < 0x20 || x == '\x7f' => i += 1,
+            x => {
+                let row = rows.entry(r).or_default();
+                if row.len() <= c {
+                    row.resize(c + 1, ' ');
+                }
+                row[c] = x;
+                c += 1;
+                i += 1;
+            }
+        }
+        bottom = bottom.max(r);
+    }
+    rows.values().map(|row| row.iter().collect::<String>().trim_end().to_string()).collect::<Vec<_>>().join("\n")
+}
+
+/// The screen's last few lines, for a sign-in that failed: what Claude Code said, never a token.
+fn last_said(text: &str) -> String {
+    let lines: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    let tail = lines[lines.len().saturating_sub(2)..].join(" / ");
+    let tail = Regex::new(r"sk-ant-\S*").unwrap().replace_all(&tail, "sk-ant-…").into_owned();
+    tail.chars().take(200).collect()
 }
 
 fn cloexec(fd: libc::c_int) {
@@ -204,20 +316,20 @@ impl SignIns {
             .unwrap()
             .remove(session_id)
             .ok_or_else(|| anyhow!("this sign-in has ended: start it again"))?;
-        let before = s.text().len();
+        let before = failures(&s.text());
         s.write(format!("{code}\r").as_bytes())?;
         let text = s.read(
             |s| {
                 let t = s.text();
-                accounts::TOKEN.is_match(&t) || failed(t.get(before..).unwrap_or(""))
+                accounts::TOKEN.is_match(&t) || failures(&t) > before
             },
             timeout,
         );
         let Some(token) = accounts::find_token(&text) else {
-            bail!(if failed(&text) {
-                "Claude didn't take that code: start the sign-in again"
+            bail!(if failures(&text) > before {
+                format!("Claude didn't take that code: start the sign-in again ({})", last_said(&text))
             } else {
-                "Claude Code didn't give a token"
+                format!("Claude Code didn't give a token (it showed: {})", last_said(&text))
             });
         };
         let value = json!({"kind": "env", "vars": {"CLAUDE_CODE_OAUTH_TOKEN": token}});
@@ -234,4 +346,54 @@ impl SignIns {
         };
         drop(stale);
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_screen_keeps_letters_only_redrawn_where_they_changed() {
+        // as Claude Code drew a test code's error: the cursor moved over the 'e' of "Request", already on
+        // screen from an earlier frame, so dropping the escape codes would read "Requst"
+        let raw = format!(
+            "{}e\r\x1b[1COAuth error: Requ\x1b[20Gst\x1b[23Gfailed with\x1b[35Gstatus code 400\x1b[K",
+            " ".repeat(18)
+        );
+        assert_eq!(screen(&raw), " OAuth error: Request failed with status code 400");
+        // a token drawn over an earlier one in the same place: only the letters that changed are written
+        let first = format!("Token:\r\nsk-ant-oat01-{}\r\n", "A".repeat(40));
+        let shown = screen(&(first + "\x1b[1A\x1b[18GBBBB\x1b[40GCC\r\x1b[1B"));
+        let want = format!("sk-ant-oat01-{}BBBB{}CC{}", "A".repeat(4), "A".repeat(18), "A".repeat(12));
+        assert_eq!(shown, format!("Token:\n{want}"));
+        assert_eq!(accounts::find_token(&shown).as_deref(), Some(want.as_str()));
+    }
+
+    #[test]
+    fn links_modes_and_erases() {
+        let raw = "\x1b]8;id=1;https://x.example/a\x07link\x1b]8;;\x07 here\x1b[?2004h\x1b(B\r\nline two\x1b[5D\x1b[K!";
+        assert_eq!(screen(raw), "link here\nlin!");
+        assert_eq!(screen("abc\r\ndef\x1b[2Jxyz"), "   xyz");
+        assert_eq!(screen("one\r\ntwo\x1b[5A\rONE"), "ONE\ntwo"); // no higher than the top line
+    }
+
+    #[test]
+    fn a_failure_says_what_claude_showed_but_never_a_token() {
+        let text = "Your OAuth token:\nsk-ant-oat01-secretsecretsecretsecret\nPress Enter to continue";
+        assert_eq!(last_said(text), "sk-ant-… / Press Enter to continue");
+    }
+}
+
+/// Against the real `claude setup-token`, with a made-up code: `cargo test -- --ignored real_setup_token`.
+/// It gives a link that works anywhere, then says Claude refused the code, in words read off the screen.
+#[cfg(test)]
+#[test]
+#[ignore]
+fn real_setup_token() {
+    let s = SignIns::new(None);
+    let got = s.start("t1", Duration::from_secs(60)).unwrap();
+    assert!(got["url"].as_str().unwrap().contains("platform.claude.com"));
+    let err = s.code("t1", "fakecode1234567890abcdef#fakestate1234567890", Duration::from_secs(60)).unwrap_err();
+    println!("{err}");
+    assert!(err.to_string().contains("didn't take that code") && err.to_string().contains("Request failed"));
 }

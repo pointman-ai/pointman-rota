@@ -24,7 +24,7 @@ extension its node runs, and the rest of its subcommands are the command line fo
   so its cache stays warm, until either window passes 90%. Then they move to the account with the most room,
   if it's at least 10 points under. The run gets that account's token as `CLAUDE_CODE_OAUTH_TOKEN`, or
   nothing for the machine's own login.
-- **Seeing it:** each account is a part under rota in `mb health` and on the apps' Machines page ("5h 46%
+- **Seeing it:** each account is a part under rota in `pointman health` and on the apps' Machines page ("5h 46%
   (resets 14:30) · week 37% (resets Tue 03:00) · runs start here"). Agents have a `rota_status` tool.
 - **Steering it** (commands, run on a machine like any extension's: agents with `run_on_machine`):
   - `rota.swap {to}`: new runs start on that account now (none named: the one with the most room), and stay
@@ -38,7 +38,7 @@ extension its node runs, and the rest of its subcommands are the command line fo
 - **Cooldown:** an account runs moved off sits out 10 minutes (`cooldown_minutes`) even if it looks fine
   again, unless nothing else can take runs: its numbers can lag, and two nearly full accounts would otherwise
   take turns run by run.
-- **Each move is on the machine's status:** the account runs start on says since when and why in `mb health`
+- **Each move is on the machine's status:** the account runs start on says since when and why in `pointman health`
   and on Machines ("since 14:05 (work was at 97%)"), and `rota.status` keeps the last 10 moves.
 
 ## Install on a node
@@ -81,7 +81,7 @@ account, paste the code the page shows back into the app, and the token goes str
 for your machines, without anyone seeing it.
 
 Or keep a token on one machine only, with rota's own binary there: `rota add work`, then paste the token.
-It's `bin/rota` in the folder the node installed rota in (`mb health` gives the whole path when an account
+It's `bin/rota` in the folder the node installed rota in (`pointman health` gives the whole path when an account
 needs signing in again), or `cargo run --` in a checkout. `rota hold <label>` keeps runs off an account (a
 vault one too), `use <label>` puts it back, `remove <label>` takes one out of this machine's file, and `list`
 shows the file's accounts (never their tokens).
@@ -94,7 +94,7 @@ and runs `codex login` in it. Codex keeps that account's sign-in there and refre
 the node starts goes on an account by the same rule, with `CODEX_HOME` set to its home (nothing for the
 machine's own `~/.codex`). Rota reads each account's windows from the newest session Codex wrote in its home
 (`rate_limits`), after every run. Codex accounts aren't probed, so one nothing has run on stays unknown. They
-show in `mb health` as `codex.<label>`.
+show in `pointman health` as `codex.<label>`.
 
 ## Not yet
 

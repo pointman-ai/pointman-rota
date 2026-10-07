@@ -1,6 +1,6 @@
 //! `rota serve`: the extension its node runs. The node asks it which account each Claude Code or Codex
 //! run starts on (`session.prepare`), tells it how each run ended (`session.ended`), and shows its
-//! accounts as parts in `mb health`; people and agents steer it with its commands.
+//! accounts as parts in `pointman health`; people and agents steer it with its commands.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
@@ -128,7 +128,7 @@ fn label_of(p: &Value, key: &str) -> anyhow::Result<String> {
     Ok(label)
 }
 
-/// How a part is doing in `mb health`, from how full it is and whether its token was refused.
+/// How a part is doing in `pointman health`, from how full it is and whether its token was refused.
 fn part_state(seen: &Seen, full: Option<f64>) -> &'static str {
     match full {
         _ if seen.refused() => "failing",
@@ -290,7 +290,7 @@ impl Rota {
         60.0 * self.setting("cooldown_minutes").unwrap_or(10.0)
     }
 
-    /// A swap: kept for the machine's status (Machines, `mb health`, rota.status) and logged.
+    /// A swap: kept for the machine's status (Machines, `pointman health`, rota.status) and logged.
     fn moved(&self, st: &mut State, was: Option<String>, to: &str, why: String) {
         let now = now();
         if let Some(was) = &was {
@@ -479,7 +479,7 @@ impl Rota {
         Ok(json!({}))
     }
 
-    /// Each account as a part under rota in `mb health` and the apps' Machines page.
+    /// Each account as a part under rota in `pointman health` and the apps' Machines page.
     fn health(&self) -> Value {
         let toks = self.all_tokens();
         let held = self.held_labels(&toks);

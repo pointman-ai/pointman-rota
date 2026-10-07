@@ -6,7 +6,8 @@ use std::io::{self, BufRead, Write};
 use crate::accounts::{self, Account, DEFAULT};
 use crate::codex;
 
-const USAGE: &str = "Accounts are best kept in the board's vault as rota.<label> (from the apps, or `mb vault store`).
+const USAGE: &str =
+    "Accounts are best kept in the board's vault as rota.<label> (from the apps, or `pointman secrets add`).
 On this machine only:
 rota add <label>        add an account: paste the token `claude setup-token` printed
 rota remove <label>     take one out
@@ -71,8 +72,9 @@ pub fn main(argv: &[String]) -> i32 {
             }
             store.accounts.retain(|a| a.label != label);
             store.accounts.push(Account { token: Some(token), ..Account::new(&label) });
-            accounts::save_store(&store, None)
-                .map(|_| println!("added {label}. Rota checks it within a minute; `mb health` shows how full it is."))
+            accounts::save_store(&store, None).map(|_| {
+                println!("added {label}. Rota checks it within a minute; `pointman health` shows how full it is.")
+            })
         }
         // one kept in the vault is held here by its label
         "hold" => accounts::hold(&label, true, None).map(|_| println!("runs stay off {label}")),
