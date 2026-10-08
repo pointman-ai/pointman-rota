@@ -45,6 +45,11 @@ extension its node runs, and the rest of its subcommands are the command line fo
 - **claude.ai connectors:** a run granted one (Drive, say) starts on the machine's own login while it can
   take runs, since a setup token loads none of them. The node passes a run's connectors to
   `session.prepare` as `connectors`. An agent's own account still wins; its folder's comes after.
+- **Usage credits** (James, Pointman thread 649 [4622]): each account's line says what happens past 100%,
+  from its runs' own limit events: `usage credits on`, `on usage credits`, `usage credits off`,
+  `out of usage credits`, or `monthly spend limit reached` (Claude's "You've hit your monthly spend
+  limit": runs stop when a window fills). It's `extra` in rota's summary. The amounts spent aren't there:
+  only claude.ai's usage page has them, and a setup token can't read it.
 - **A warning isn't a limit:** `allowed_warning` (a window past a mark, like the week at 52%) still takes
   runs; only a status that isn't `allowed…` blocks an account until its reset.
 - **Cooldown:** an account runs moved off sits out 10 minutes (`cooldown_minutes`) even if it looks fine

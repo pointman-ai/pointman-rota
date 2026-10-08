@@ -334,7 +334,9 @@ impl Rota {
                                      "used": accounts::used(seen, Some(now))});
                 if let Some(Value::Object(known)) = seen.map(|s| serde_json::to_value(s).unwrap_or_default()) {
                     for (k, v) in known {
-                        if ["five_hour", "seven_day", "status", "needs_auth", "checked_at"].contains(&k.as_str()) {
+                        if ["five_hour", "seven_day", "status", "needs_auth", "checked_at", "extra"]
+                            .contains(&k.as_str())
+                        {
                             row[k] = v;
                         }
                     }
@@ -392,6 +394,7 @@ impl Rota {
                 seen.seven_day = got.seven_day;
                 seen.status = got.status;
                 seen.blocked_until = got.blocked_until;
+                seen.extra = got.extra.or(seen.extra.take());
                 seen.needs_auth = Some(false);
             } else if refused {
                 seen.needs_auth = Some(true);

@@ -148,6 +148,11 @@ pub struct Seen {
     pub checked_at: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Usage past the windows, paid from usage credits (James, Pointman thread 649 [4622]): `using`, `on`,
+    /// `spent` (its monthly spend limit is reached), `no_credits` or `off`. A run stops at 100% unless it's
+    /// `on` or `using`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra: Option<String>,
 }
 
 impl Seen {
@@ -177,6 +182,7 @@ pub fn windows(limits: Option<&Value>) -> Seen {
             }
         }
     }
+    out.extra = extra(limits).map(str::to_string);
     if let Some(status) = limits.get("status").and_then(Value::as_str).filter(|s| !s.is_empty()) {
         out.status = Some(status.to_string());
         // `allowed_warning` still takes runs: Claude's word that a window passed a mark (the week at 52%),
@@ -187,6 +193,22 @@ pub fn windows(limits: Option<&Value>) -> Seen {
         }
     }
     out
+}
+
+/// What `rate_limit_info` says of usage credits. `org_level_disabled_until` is what Claude Code words as
+/// "You've hit your monthly spend limit". None when it says nothing: its `allowed_warning` events don't.
+fn extra(limits: &Value) -> Option<&'static str> {
+    if limits.get("isUsingOverage").and_then(Value::as_bool) == Some(true) {
+        return Some("using");
+    }
+    if limits.get("overageStatus").and_then(Value::as_str)?.starts_with("allowed") {
+        return Some("on");
+    }
+    Some(match limits.get("overageDisabledReason").and_then(Value::as_str).unwrap_or_default() {
+        "org_level_disabled_until" => "spent",
+        "out_of_credits" => "no_credits",
+        _ => "off",
+    })
 }
 
 /// How full the account is: its fuller window, a window that has reset counting as empty, and 100 while
@@ -275,6 +297,18 @@ pub fn describe(label: &str, seen: Option<&Seen>, current: Option<&str>, now: Op
     }
     if bits.is_empty() {
         bits.push("not checked yet".into());
+    }
+    if let Some(extra) = seen.and_then(|s| s.extra.as_deref()) {
+        bits.push(
+            match extra {
+                "using" => "on usage credits",
+                "on" => "usage credits on",
+                "spent" => "monthly spend limit reached",
+                "no_credits" => "out of usage credits",
+                _ => "usage credits off",
+            }
+            .into(),
+        );
     }
     if seen.is_some_and(Seen::refused) {
         bits.push("its token was refused".into());

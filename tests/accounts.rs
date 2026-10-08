@@ -76,6 +76,33 @@ fn windows_and_how_full() {
 }
 
 #[test]
+fn usage_credits() {
+    // a real run's last event (aurelio-team, 8 Oct): its 5 hours full and its monthly spend limit reached,
+    // which Claude Code words as "You've hit your monthly spend limit"
+    let spent = accounts::windows(Some(&json!({
+        "status": "rejected", "resetsAt": 4102444800u64, "rateLimitType": "five_hour", "overageStatus": "rejected",
+        "overageDisabledReason": "org_level_disabled_until", "isUsingOverage": false,
+        "unifiedWindows": {"five_hour": {"utilization": 1, "resetsAt": 4102444800u64},
+                           "seven_day": {"utilization": 0.43, "resetsAt": 4102444800u64}}})));
+    assert_eq!(spent.extra.as_deref(), Some("spent"));
+    let line = accounts::describe("work", Some(&spent), None, Some(RESETS - 3600.0));
+    assert!(line.contains("week 43% (resets ") && line.ends_with(" · monthly spend limit reached"), "{line}");
+    let said = |info: Value| accounts::windows(Some(&info)).extra;
+    assert_eq!(
+        said(json!({"overageStatus": "rejected", "overageDisabledReason": "org_level_disabled"})).as_deref(),
+        Some("off")
+    );
+    assert_eq!(
+        said(json!({"overageStatus": "rejected", "overageDisabledReason": "out_of_credits"})).as_deref(),
+        Some("no_credits")
+    );
+    assert_eq!(said(json!({"overageStatus": "allowed", "isUsingOverage": false})).as_deref(), Some("on"));
+    assert_eq!(said(json!({"overageStatus": "allowed", "isUsingOverage": true})).as_deref(), Some("using"));
+    // a warning says nothing of credits: rota keeps what it knew
+    assert_eq!(said(json!({"status": "allowed_warning", "isUsingOverage": false})), None);
+}
+
+#[test]
 fn the_rule() {
     let all = labels(&["default", "work", "spare"]);
     let mut f = fill(&[("default", seen(50.0, 0.0)), ("work", seen(10.0, 0.0)), ("spare", seen(30.0, 0.0))]);

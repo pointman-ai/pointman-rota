@@ -199,9 +199,16 @@ fn rota_on_a_node() {
         json!({"env": {"CLAUDE_CODE_OAUTH_TOKEN": spare()}, "account": "spare"})
     );
     // and spare full too: nothing else has room, so they stay put
-    host.ended("spare", "done", Value::Null, five_hour(0.95));
+    let mut spent = five_hour(0.95);
+    spent["overageStatus"] = json!("rejected");
+    spent["overageDisabledReason"] = json!("org_level_disabled_until");
+    host.ended("spare", "done", Value::Null, spent);
     assert_eq!(host.account(json!({"run": 4, "client": "claude"})), "spare");
+    // its spend limit stays known through a run whose last event doesn't say
+    host.ended("spare", "done", Value::Null, five_hour(0.95));
     let status = host.status();
+    assert_eq!(rows(&status)["spare"]["extra"], "spent");
+    assert!(rows(&status)["spare"]["line"].as_str().unwrap().contains("monthly spend limit reached"));
     assert_eq!(status["current"], "spare");
     assert!(!status.to_string().contains(&work()));
     let order: Vec<&str> =
