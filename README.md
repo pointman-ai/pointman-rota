@@ -45,11 +45,14 @@ extension its node runs, and the rest of its subcommands are the command line fo
 - **claude.ai connectors:** a run granted one (Drive, say) starts on the machine's own login while it can
   take runs, since a setup token loads none of them. The node passes a run's connectors to
   `session.prepare` as `connectors`. An agent's own account still wins; its folder's comes after.
-- **Usage credits** (James, Pointman thread 649 [4622]): each account's line says what happens past 100%,
-  from its runs' own limit events: `usage credits on`, `on usage credits`, `usage credits off`,
-  `out of usage credits`, or `monthly spend limit reached` (Claude's "You've hit your monthly spend
-  limit": runs stop when a window fills). It's `extra` in rota's summary. The amounts spent aren't there:
-  only claude.ai's usage page has them, and a setup token can't read it.
+- **Usage credits** (James, Pointman thread 649 [4622], [4634]): each account's line says what happens past
+  100%: `monthly spend 40% ($80 of $200)`, `monthly spend limit reached ($200 of $200)` (Claude's "You've
+  hit your monthly spend limit": runs stop when a window fills), `usage credits on, $12 this month, no
+  limit`, or `usage credits off`. The amounts are what Claude Code's `/usage` shows: each check asks it
+  (`get_usage`, a control request on its stream-json input), and an account runs keep busy is asked alone
+  every `check_minutes`, which takes no turn. It's `credits` in rota's summary. Where Claude Code has no
+  usage for an account, its runs' limit events still say whether credits are on, in use, off, or at their
+  limit (`extra`).
 - **A warning isn't a limit:** `allowed_warning` (a window past a mark, like the week at 52%) still takes
   runs; only a status that isn't `allowed…` blocks an account until its reset.
 - **Cooldown:** an account runs moved off sits out 10 minutes (`cooldown_minutes`) even if it looks fine

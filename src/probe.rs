@@ -1,8 +1,11 @@
 //! Checking an account nothing has run on lately: a one-line Haiku run through Claude Code itself, whose
 //! stream reports the account's limits like any run's (`rate_limit_event`). Claude Code does the talking,
-//! on the account's own token, so rota never calls Anthropic's API directly.
+//! on the account's own token, so rota never calls Anthropic's API directly. Each check also asks Claude
+//! Code for the account's usage (`get_usage`, what its `/usage` shows), which has its usage credits: the
+//! monthly spend limit, what's spent and its % (James, Pointman thread 649 [4634]). That needs no turn, so
+//! an account runs keep busy is asked for it alone.
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
@@ -37,13 +40,20 @@ pub fn refused(text: Option<&str>) -> bool {
     AUTH.iter().any(|word| low.contains(word))
 }
 
-/// The account's last rate_limit_info, or why there's none.
+/// The account's last rate_limit_info, or why there's none, and its usage when Claude Code gave it.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct Checked {
     pub limits: Option<Value>,
     pub error: Option<String>,
     pub refused: bool,
+    /// `get_usage`'s `rate_limits`: {five_hour, seven_day, extra_usage, …}.
+    pub usage: Option<Value>,
+    /// Why there's no usage, when Claude Code said.
+    pub usage_error: Option<String>,
 }
+
+const ASK_USAGE: &str = r#"{"type":"control_request","request_id":"usage","request":{"subtype":"get_usage"}}"#;
+const TURN: &str = r#"{"type":"user","message":{"role":"user","content":"Reply with OK."}}"#;
 
 /// What a program wrote, and how it ended.
 pub struct Ran {
@@ -52,9 +62,15 @@ pub struct Ran {
     pub stderr: String,
 }
 
-/// Run a program to its end, or kill it after `timeout` and answer None, as `subprocess.run(…, timeout=…)`.
-pub fn run(cmd: &mut Command, timeout: Duration) -> std::io::Result<Option<Ran>> {
-    let mut child = cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+/// Run a program to its end, `input` on its stdin, or kill it after `timeout` and answer None, as
+/// `subprocess.run(…, input=…, timeout=…)`.
+pub fn run(cmd: &mut Command, input: Option<&str>, timeout: Duration) -> std::io::Result<Option<Ran>> {
+    let stdin = if input.is_some() { Stdio::piped() } else { Stdio::null() };
+    let mut child = cmd.stdin(stdin).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+    if let (Some(mut to), Some(input)) = (child.stdin.take(), input) {
+        let input = input.to_string();
+        thread::spawn(move || to.write_all(input.as_bytes())); // closed when written: the end of its input
+    }
     let drain = |mut from: Box<dyn Read + Send>| {
         thread::spawn(move || {
             let mut buf = vec![];
@@ -83,34 +99,62 @@ fn first(text: &str, n: usize) -> String {
     text.chars().take(n).collect()
 }
 
-/// {limits, error, refused}: the account's last rate_limit_info, or why there's none.
+/// {limits, error, refused, usage}: the account's last rate_limit_info, or why there's none, and its usage.
 pub fn check(token: Option<&str>, claude: Option<&Path>, timeout: Duration) -> std::io::Result<Checked> {
+    ask(token, claude, timeout, true)
+}
+
+/// The account's usage alone: no turn, so nothing of its limits is spent.
+pub fn usage(token: Option<&str>, claude: Option<&Path>, timeout: Duration) -> std::io::Result<Checked> {
+    ask(token, claude, timeout, false)
+}
+
+fn ask(token: Option<&str>, claude: Option<&Path>, timeout: Duration, turn: bool) -> std::io::Result<Checked> {
     let Some(claude) = claude.map(Path::to_path_buf).or_else(find_claude) else {
         return Ok(Checked { error: Some("Claude Code isn't installed here".into()), ..Default::default() });
     };
     // its own empty folder, no MCP servers, no settings and nothing kept: nothing but the one turn
     let folder = tempfile::Builder::new().prefix("rota-check-").tempdir()?;
     let mut cmd = Command::new(&claude);
-    cmd.args(["-p", "Reply with OK.", "--model", "haiku", "--output-format", "stream-json", "--verbose"])
-        .args(["--strict-mcp-config", "--mcp-config", r#"{"mcpServers":{}}"#, "--setting-sources", ""])
-        .args(["--no-session-persistence", "--max-turns", "1"])
-        .current_dir(folder.path());
+    cmd.args([
+        "-p",
+        "--input-format",
+        "stream-json",
+        "--model",
+        "haiku",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+    ])
+    .args(["--strict-mcp-config", "--mcp-config", r#"{"mcpServers":{}}"#, "--setting-sources", ""])
+    .args(["--no-session-persistence", "--max-turns", "1"])
+    .current_dir(folder.path());
     for name in UNSET {
         cmd.env_remove(name);
     }
     if let Some(token) = token {
         cmd.env("CLAUDE_CODE_OAUTH_TOKEN", token);
     }
-    let Some(r) = run(&mut cmd, timeout)? else {
+    let input = if turn { format!("{ASK_USAGE}\n{TURN}\n") } else { format!("{ASK_USAGE}\n") };
+    let Some(r) = run(&mut cmd, Some(&input), timeout)? else {
         return Ok(Checked {
             error: Some(format!("no answer in {:.0} s", timeout.as_secs_f64())),
             ..Default::default()
         });
     };
-    let (mut limits, mut error) = (None, None);
+    let (mut limits, mut error, mut usage, mut usage_error) = (None, None, None, None);
     for line in r.stdout.lines() {
         let Ok(d) = serde_json::from_str::<Value>(line) else { continue };
         match d.get("type").and_then(Value::as_str) {
+            Some("control_response") if d["response"]["request_id"] == "usage" => {
+                let got = &d["response"]["response"];
+                if d["response"]["subtype"] == "success" && got["rate_limits_available"] == true {
+                    usage = got.get("rate_limits").filter(|u| u.is_object()).cloned();
+                } else {
+                    let said = d["response"]["error"].as_str().map(String::from);
+                    usage_error = Some(first(&said.unwrap_or_else(|| "it has none for this account".into()), 300));
+                }
+            }
             Some("rate_limit_event") if d.get("rate_limit_info").is_some_and(Value::is_object) => {
                 limits = d.get("rate_limit_info").cloned();
             }
@@ -122,11 +166,11 @@ pub fn check(token: Option<&str>, claude: Option<&Path>, timeout: Duration) -> s
             _ => {}
         }
     }
-    if limits.is_none() && error.is_none() && !r.status.success() {
+    if limits.is_none() && error.is_none() && !r.status.success() && (turn || usage.is_none()) {
         let code = r.status.code().unwrap_or_else(|| -r.status.signal().unwrap_or(0));
         let last = r.stderr.trim().lines().last().map_or(format!("exited with {code}"), String::from);
         error = Some(first(&last, 300));
     }
-    let refused = refused(error.as_deref()) && limits.is_none();
-    Ok(Checked { limits, error, refused })
+    let refused = refused(error.as_deref()) && limits.is_none() && usage.is_none();
+    Ok(Checked { limits, error, refused, usage, usage_error })
 }

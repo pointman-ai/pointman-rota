@@ -34,6 +34,17 @@ if [ "$1" = "setup-token" ]; then
   else printf '\nOAuth error: Invalid code\n'; fi
   exit 0
 fi
+# its usage (`get_usage`), as on 8 Oct: the machine's own login with credits off, work's 40% of its monthly
+# limit, and none for spare (a setup token's, maybe)
+input=$(cat)
+case "$input" in *get_usage*)
+  case "$CLAUDE_CODE_OAUTH_TOKEN" in
+    "") echo '{"type":"control_response","response":{"subtype":"success","request_id":"usage","response":{"rate_limits_available":true,"rate_limits":{"extra_usage":{"is_enabled":false,"monthly_limit":null,"used_credits":null,"utilization":null,"currency":null,"spend_limit_reached":false}}}}}' ;;
+    *www*) echo '{"type":"control_response","response":{"subtype":"success","request_id":"usage","response":{"rate_limits_available":true,"rate_limits":{"extra_usage":{"is_enabled":true,"monthly_limit":20000,"used_credits":8050,"utilization":40,"currency":"usd","spend_limit_reached":false}}}}}' ;;
+    *) echo '{"type":"control_response","response":{"subtype":"error","request_id":"usage","error":"no usage for this token"}}' ;;
+  esac ;;
+esac
+case "$input" in *'"type":"user"'*) ;; *) exit 0 ;; esac
 # Claude Code, as far as rota's check needs: one rate_limit_event, how full by which token it's given
 case "$CLAUDE_CODE_OAUTH_TOKEN" in
   "") used=0.95 ;;
@@ -188,6 +199,15 @@ fn rota_on_a_node() {
     assert_eq!(got["old"]["state"], "failing");
     // an account kept in the vault, as rota.spare, is one too; a name that isn't a label isn't
     assert!(why(&got, "spare").starts_with("5h 20%") && !format!("{got:?}").contains("Not A Label"));
+    // the same check asked Claude Code for each one's usage credits: % of the monthly spend limit, in dollars
+    let first = rows(&host.status());
+    assert_eq!(
+        (&first["work"]["credits"]["used"], &first["work"]["credits"]["limit"], &first["work"]["credits"]["percent"]),
+        (&json!(80.5), &json!(200.0), &json!(40.0))
+    );
+    assert!(first["work"]["line"].as_str().unwrap().ends_with(" · monthly spend 40% ($80.50 of $200)"), "{first:?}");
+    assert!(first["default"]["line"].as_str().unwrap().contains(" · usage credits off"));
+    assert!(first["spare"].get("credits").is_none());
     // the machine's own login is past 90%, so runs start on work, with its token
     let run = host.call("session.prepare", json!({"run": 1, "handle": "scene", "client": "claude"}));
     assert_eq!(run, json!({"env": {"CLAUDE_CODE_OAUTH_TOKEN": work()}, "account": "work"}));

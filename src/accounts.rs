@@ -153,8 +153,81 @@ pub struct Seen {
     /// `on` or `using`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extra: Option<String>,
+    /// Its usage credits as Claude Code's `get_usage` gave them, when it did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credits: Option<Credits>,
+    /// When Claude Code was last asked for its usage, answered or not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage_at: Option<f64>,
 }
 
+/// An account's usage credits this month, as Claude Code's `/usage` shows them (James, Pointman thread 649
+/// [4634]: "% of monthly spend limit"). Amounts in the currency's units (dollars), not cents.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct Credits {
+    pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub used: Option<f64>,
+    /// The monthly spend limit; None: no limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<f64>,
+    /// How much of the limit is spent, 0–100.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub percent: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub currency: Option<String>,
+    #[serde(default)]
+    pub reached: bool,
+    #[serde(default, serialize_with = "epoch")]
+    pub at: Option<f64>,
+}
+
+/// `get_usage`'s `rate_limits.extra_usage`: amounts in cents (Claude Code's own `cap_cents` and
+/// `spent_cents`), `utilization` a %. None when it has none.
+pub fn credits(usage: Option<&Value>, at: f64) -> Option<Credits> {
+    let x = usage?.get("extra_usage").filter(|x| x.is_object())?;
+    let cents = 10f64.powi(x["decimal_places"].as_i64().unwrap_or(2) as i32);
+    let amount = |key: &str| x[key].as_f64().map(|c| c / cents);
+    Some(Credits {
+        enabled: x["is_enabled"] == true,
+        used: amount("used_credits"),
+        limit: amount("monthly_limit"),
+        percent: x["utilization"].as_f64().map(round1),
+        currency: x["currency"].as_str().map(str::to_uppercase),
+        reached: x["spend_limit_reached"] == true,
+        at: Some(at),
+    })
+}
+
+/// "$12.50", or "12.50 EUR".
+fn money(amount: f64, currency: Option<&str>) -> String {
+    match currency.unwrap_or("USD") {
+        "USD" => format!("${amount:.2}"),
+        other => format!("{amount:.2} {other}"),
+    }
+    .replace(".00", "")
+}
+
+/// What an account's credits come to on its line: "monthly spend 40% ($80 of $200)".
+fn credits_line(c: &Credits, spent: bool) -> String {
+    if !c.enabled {
+        return "usage credits off".into();
+    }
+    let cur = c.currency.as_deref();
+    let of = match (c.used, c.limit) {
+        (Some(used), Some(limit)) => format!(" ({} of {})", money(used, cur), money(limit, cur)),
+        _ => String::new(),
+    };
+    match (c.reached || spent, c.limit, c.percent) {
+        (true, _, _) => format!("monthly spend limit reached{of}"),
+        (false, Some(_), Some(p)) => format!("monthly spend {p:.0}%{of}"),
+        (false, None, _) => match c.used {
+            Some(used) => format!("usage credits on, {} this month, no limit", money(used, cur)),
+            None => "usage credits on, no limit".into(),
+        },
+        _ => format!("usage credits on{of}"),
+    }
+}
 impl Seen {
     pub fn refused(&self) -> bool {
         self.needs_auth == Some(true)
@@ -205,7 +278,7 @@ fn extra(limits: &Value) -> Option<&'static str> {
         return Some("on");
     }
     Some(match limits.get("overageDisabledReason").and_then(Value::as_str).unwrap_or_default() {
-        "org_level_disabled_until" => "spent",
+        "org_level_disabled_until" | "org_spend_cap_reached" => "spent",
         "out_of_credits" => "no_credits",
         _ => "off",
     })
@@ -298,7 +371,10 @@ pub fn describe(label: &str, seen: Option<&Seen>, current: Option<&str>, now: Op
     if bits.is_empty() {
         bits.push("not checked yet".into());
     }
-    if let Some(extra) = seen.and_then(|s| s.extra.as_deref()) {
+    let extra = seen.and_then(|s| s.extra.as_deref());
+    if let Some(c) = seen.and_then(|s| s.credits.as_ref()) {
+        bits.push(credits_line(c, extra == Some("spent")));
+    } else if let Some(extra) = extra {
         bits.push(
             match extra {
                 "using" => "on usage credits",

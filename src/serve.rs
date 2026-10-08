@@ -334,7 +334,7 @@ impl Rota {
                                      "used": accounts::used(seen, Some(now))});
                 if let Some(Value::Object(known)) = seen.map(|s| serde_json::to_value(s).unwrap_or_default()) {
                     for (k, v) in known {
-                        if ["five_hour", "seven_day", "status", "needs_auth", "checked_at", "extra"]
+                        if ["five_hour", "seven_day", "status", "needs_auth", "checked_at", "extra", "credits"]
                             .contains(&k.as_str())
                         {
                             row[k] = v;
@@ -707,17 +707,50 @@ impl Rota {
         }))
     }
 
-    /// Check each account nothing has told rota about lately, one at a time.
+    /// An account's usage credits from Claude Code's `get_usage`, kept until it answers again. Told with the
+    /// next `note`, or by the caller.
+    fn note_usage(&self, label: &str, got: &probe::Checked) {
+        let mut st = self.state();
+        let seen = st.seen.entry(label.to_string()).or_default();
+        seen.usage_at = Some(now());
+        if let Some(credits) = accounts::credits(got.usage.as_ref(), now()) {
+            seen.credits = Some(credits);
+        } else if let Some(why) = &got.usage_error {
+            self.h.log(format!("no usage for {label} from Claude Code: {why}"));
+        }
+        self.save_state(&st);
+    }
+
+    /// Check each account nothing has told rota about lately, one at a time, and ask Claude Code for the
+    /// usage credits of those runs keep busy (that needs no turn).
     fn check_idle(&self) {
         let every = 60.0 * self.setting("check_minutes").filter(|m| *m != 0.0).unwrap_or(30.0);
         for (label, token) in self.all_tokens() {
-            let checked = self.state().seen.get(&label).and_then(|s| s.checked_at).unwrap_or(0.0);
-            if now() - checked < every {
-                continue;
-            }
-            match probe::check(token.as_deref(), None, Duration::from_secs(120)) {
-                Ok(got) => self.note(&label, got.limits.as_ref(), got.error, got.refused),
-                Err(e) => self.h.log(format!("couldn't check {label}: {e}")),
+            let (checked, asked, refused) = {
+                let st = self.state();
+                let seen = st.seen.get(&label);
+                (
+                    seen.and_then(|s| s.checked_at).unwrap_or(0.0),
+                    seen.and_then(|s| s.usage_at).unwrap_or(0.0),
+                    seen.is_some_and(Seen::refused),
+                )
+            };
+            if now() - checked >= every {
+                match probe::check(token.as_deref(), None, Duration::from_secs(120)) {
+                    Ok(got) => {
+                        self.note_usage(&label, &got);
+                        self.note(&label, got.limits.as_ref(), got.error, got.refused)
+                    }
+                    Err(e) => self.h.log(format!("couldn't check {label}: {e}")),
+                }
+            } else if now() - asked >= every && !refused {
+                match probe::usage(token.as_deref(), None, Duration::from_secs(60)) {
+                    Ok(got) => {
+                        self.note_usage(&label, &got);
+                        self.tell();
+                    }
+                    Err(e) => self.h.log(format!("couldn't ask for {label}'s usage: {e}")),
+                }
             }
         }
     }

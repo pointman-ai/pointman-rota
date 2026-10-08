@@ -100,6 +100,38 @@ fn usage_credits() {
     assert_eq!(said(json!({"overageStatus": "allowed", "isUsingOverage": true})).as_deref(), Some("using"));
     // a warning says nothing of credits: rota keeps what it knew
     assert_eq!(said(json!({"status": "allowed_warning", "isUsingOverage": false})), None);
+    assert_eq!(
+        said(json!({"overageStatus": "rejected", "overageDisabledReason": "org_spend_cap_reached"})).as_deref(),
+        Some("spent")
+    );
+}
+
+#[test]
+fn the_monthly_spend_limit() {
+    // Claude Code's `get_usage`: cents, and a %
+    let usage = |x: Value| accounts::credits(Some(&json!({"extra_usage": x})), 1.0).unwrap();
+    let some = usage(json!({"is_enabled": true, "monthly_limit": 20000, "used_credits": 8050, "utilization": 40.25,
+                            "currency": "usd", "spend_limit_reached": false}));
+    assert_eq!(
+        (some.used, some.limit, some.percent, some.currency.as_deref()),
+        (Some(80.5), Some(200.0), Some(40.2), Some("USD"))
+    );
+    let line = |c: accounts::Credits, extra: Option<&str>| {
+        let seen = Seen { credits: Some(c), extra: extra.map(String::from), ..seen(10.0, 20.0) };
+        accounts::describe("work", Some(&seen), None, Some(RESETS - 3600.0))
+    };
+    assert!(line(some.clone(), None).ends_with(" · monthly spend 40% ($80.50 of $200)"));
+    // reached, by its own word or a run's since
+    let full = usage(json!({"is_enabled": true, "monthly_limit": 20000, "used_credits": 20000, "utilization": 100,
+                            "spend_limit_reached": true}));
+    assert!(line(full, None).ends_with(" · monthly spend limit reached ($200 of $200)"));
+    assert!(line(some, Some("spent")).ends_with(" · monthly spend limit reached ($80.50 of $200)"));
+    let unlimited =
+        usage(json!({"is_enabled": true, "monthly_limit": null, "used_credits": 1234, "utilization": null}));
+    assert!(line(unlimited, None).ends_with(" · usage credits on, $12.34 this month, no limit"));
+    let off = usage(json!({"is_enabled": false, "monthly_limit": null, "used_credits": null, "utilization": null}));
+    assert!(line(off, Some("off")).ends_with(" · usage credits off"));
+    assert_eq!(accounts::credits(Some(&json!({"five_hour": {}})), 1.0), None);
 }
 
 #[test]
@@ -181,4 +213,17 @@ fn the_cli_keeps_tokens_for_this_user_only() {
     fs::write(&store, json!({"accounts": [{"label": "work", "token": work(), "held": true}]}).to_string()).unwrap();
     assert_eq!(tokens(&store), vec![("default".into(), None), ("work".into(), Some(work()))]);
     assert!(!cli(&["hold", "work"], &store, "").status.success());
+}
+
+/// The real Claude Code on this machine's own login: a check has its limits and its usage credits. Run by
+/// hand: `cargo test --test accounts real_check -- --ignored`.
+#[test]
+#[ignore]
+fn real_check() {
+    let got = rota::probe::check(None, None, std::time::Duration::from_secs(120)).unwrap();
+    assert!(got.limits.is_some() && got.error.is_none(), "{got:?}");
+    let credits = accounts::credits(got.usage.as_ref(), 1.0);
+    assert!(credits.is_some(), "{:?}", got.usage_error);
+    let alone = rota::probe::usage(None, None, std::time::Duration::from_secs(60)).unwrap();
+    assert_eq!((alone.limits, accounts::credits(alone.usage.as_ref(), 1.0)), (None, credits));
 }
