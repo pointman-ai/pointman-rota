@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use anyhow::bail;
-use pointman_extension::{Extension, Handle, Job};
+use pointman_extension::{Extension, Handle, Job, Pane, Refused};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -367,8 +367,28 @@ impl Rota {
                "codex": {"current": cx.current, "accounts": codex_rows}})
     }
 
+    /// What changed goes to the apps: the event (only when it did), and each open accounts pane, whose
+    /// show sends only what changed.
     fn tell(&self) {
-        self.h.event("rota.accounts", self.summary());
+        let summary = self.summary();
+        for p in self.h.panes("accounts") {
+            p.show(crate::view::pane(&summary, now()));
+        }
+        self.h.event("rota.accounts", summary);
+    }
+
+    /// A tap on the accounts pane's buttons: `swap` (the one with the most room), or `use:<label>`.
+    fn tapped(&self, event: &Value) -> anyhow::Result<()> {
+        let button = event["value"].as_str().unwrap_or_default();
+        if event["kind"] != "tap" || event["block"] != "actions" {
+            bail!(Refused::new("only the buttons do something here"));
+        }
+        let params = match button.strip_prefix("use:") {
+            Some(label) => json!({"to": label}),
+            None if button == "swap" => json!({}),
+            None => bail!(Refused::new(format!("no button {button}"))),
+        };
+        self.swap(&params).map(drop).map_err(|e| Refused::new(format!("{e:#}")).into())
     }
 
     /// A summary with a message for the person who asked, and what the apps draw for it: a button on
@@ -787,6 +807,13 @@ pub fn serve() -> anyhow::Result<()> {
         let r = rota.clone();
         ext.command(kind, move |job: &Job| f(&r, &job.params));
     }
+    // the accounts pane (Pointman's docs/dev/panes.md): kept current by tell()
+    let r = rota.clone();
+    ext.pane("accounts", move |p: &Pane| {
+        let tapped = r.clone();
+        p.on_input(move |_: &Pane, event: &Value| tapped.tapped(event));
+        Ok(json!({"title": "Claude accounts", "blocks": crate::view::pane(&r.summary(), now())}))
+    });
     let r = rota.clone();
     ext.every(Duration::from_secs(60), move |_: &Handle| r.check_idle(), "checks");
     ext.run()

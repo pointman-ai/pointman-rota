@@ -5,6 +5,8 @@
 
 use serde_json::{json, Value};
 
+use crate::util::local_time;
+
 const MAX_BUTTONS: usize = 6;
 
 /// `{text, blocks}` for a summary (`Rota::summary`), with what was just done first when there's a message.
@@ -46,6 +48,77 @@ pub fn view(summary: &Value, message: Option<&str>) -> (String, Value) {
         blocks.push(json!({"type": "actions", "buttons": buttons}));
     }
     (text, Value::Array(blocks))
+}
+
+/// Rota's pane (Pointman's docs/dev/panes.md): the same accounts as blocks, a meter for each window, and
+/// the buttons that move new runs (each a tap on `actions`, its id the button's). Shown whole each time;
+/// the SDK sends only what changed, so a meter moves in place.
+pub fn pane(summary: &Value, now: f64) -> Value {
+    let accounts = summary["accounts"].as_array().cloned().unwrap_or_default();
+    let current = summary["current"].as_str();
+    let threshold = summary["threshold"].as_f64().unwrap_or(90.0);
+    let subtitle = match current {
+        Some(c) => format!("New runs start on {c} · it swaps at {threshold:.0}%"),
+        None => "No account picked yet".to_string(),
+    };
+    let mut blocks =
+        vec![json!({"type": "heading", "id": "head", "level": 1, "text": "Claude accounts", "subtitle": subtitle})];
+    if accounts.is_empty() {
+        blocks.push(json!({"type": "empty", "id": "none", "title": "No Claude accounts yet",
+                           "note": "`/rota add` signs one in."}));
+        return Value::Array(blocks);
+    }
+    for a in &accounts {
+        let label = a["label"].as_str().unwrap_or("?");
+        let id = a["id"].as_str().unwrap_or(label);
+        // what the meters don't say: runs start here, credits, a refused token
+        let rest: Vec<&str> = a["line"]
+            .as_str()
+            .unwrap_or_default()
+            .split(" · ")
+            .filter(|bit| !bit.is_empty() && !bit.starts_with("5h ") && !bit.starts_with("week "))
+            .collect();
+        let mut children = vec![json!({"type": "heading", "id": format!("name:{id}"), "level": 3, "text": label,
+                                        "subtitle": rest.join(" · ")})];
+        for (key, name, short) in [("five_hour", "5-hour", "5h"), ("seven_day", "Weekly", "week")] {
+            let Some(used) = a[key]["used"].as_f64() else { continue };
+            let resets = a[key]["resets"].as_f64().filter(|r| *r != 0.0);
+            let (value, note) = match resets {
+                Some(r) if now >= r => (0.0, "reset".to_string()),
+                Some(r) => (
+                    used,
+                    format!("resets {}", local_time(r, if r - now < 20.0 * 3600.0 { "%H:%M" } else { "%a %H:%M" })),
+                ),
+                None => (used, String::new()),
+            };
+            let tone = if value >= threshold {
+                "bad"
+            } else if value >= threshold - 20.0 {
+                "warn"
+            } else {
+                "good"
+            };
+            children.push(json!({"type": "meter", "id": format!("{short}:{id}"), "label": name,
+                                 "value": (value * 10.0).round() / 10.0, "max": 100, "tone": tone, "note": note}));
+        }
+        blocks
+            .push(json!({"type": "stack", "id": format!("account:{id}"), "axis": "v", "gap": 4, "children": children}));
+    }
+    let mut buttons = vec![];
+    if accounts.len() > 1 {
+        buttons.push(json!({"id": "swap", "title": "Swap now"}));
+    }
+    for a in &accounts {
+        let label = a["label"].as_str().unwrap_or_default();
+        let id = a["id"].as_str().unwrap_or(label);
+        if buttons.len() < MAX_BUTTONS && Some(label) != current {
+            buttons.push(json!({"id": format!("use:{id}"), "title": format!("Start runs on {label}")}));
+        }
+    }
+    if !buttons.is_empty() {
+        blocks.push(json!({"type": "actions", "id": "actions", "buttons": buttons}));
+    }
+    Value::Array(blocks)
 }
 
 /// Each account's windows as grouped bars, as fractions drawn as percentages; the title says which one new
@@ -93,6 +166,45 @@ mod tests {
             blocks[2]["buttons"].as_array().unwrap().iter().map(|b| b["title"].as_str().unwrap()).collect();
         assert_eq!(titles, ["Swap now", "Start runs on spare", "Start runs on old"]);
         assert_eq!(blocks[2]["buttons"][1]["params"], json!({"to": "spare"}));
+    }
+
+    #[test]
+    fn the_pane_has_a_meter_for_each_window_and_buttons_that_move_runs() {
+        let mut s = summary();
+        s["threshold"] = json!(90.0);
+        s["accounts"][0]["id"] = json!("work");
+        s["accounts"][0]["five_hour"]["resets"] = json!(4102444800.0);
+        s["accounts"][0]["seven_day"]["resets"] = json!(1.0); // passed: reset
+        s["accounts"][0]["line"] = json!("5h 62% (resets 14:00) · week 31% · runs start here");
+        let blocks = pane(&s, 1000.0);
+        let blocks = blocks.as_array().unwrap();
+        assert_eq!(blocks[0]["subtitle"], "New runs start on work · it swaps at 90%");
+        let work = &blocks[1];
+        assert_eq!(work["id"], "account:work");
+        assert_eq!(
+            work["children"][0],
+            json!({"type": "heading", "id": "name:work", "level": 3, "text": "work",
+                                               "subtitle": "runs start here"})
+        );
+        let five = &work["children"][1];
+        assert_eq!(
+            (five["id"].as_str(), five["value"].as_f64(), five["tone"].as_str()),
+            (Some("5h:work"), Some(62.0), Some("good"))
+        );
+        assert!(five["note"].as_str().unwrap().starts_with("resets "));
+        assert_eq!(
+            (work["children"][2]["value"].as_f64(), work["children"][2]["note"].as_str()),
+            (Some(0.0), Some("reset"))
+        );
+        // no windows known yet: its line says so, and no meters
+        assert_eq!(blocks[2]["children"].as_array().unwrap().len(), 1);
+        assert_eq!(blocks[2]["children"][0]["subtitle"], "not checked yet");
+        assert_eq!(blocks[3]["children"][1]["tone"], "bad"); // old, at 99.5%
+        let ids: Vec<&str> =
+            blocks[4]["buttons"].as_array().unwrap().iter().map(|b| b["id"].as_str().unwrap()).collect();
+        assert_eq!(ids, ["swap", "use:spare", "use:old"]);
+        let none = pane(&json!({"current": null, "accounts": []}), 0.0);
+        assert_eq!(none[1]["type"], "empty");
     }
 
     #[test]

@@ -307,6 +307,37 @@ fn swapping_renaming_and_folders() {
     assert_eq!(host.run("rota.folder", json!({"folder": agent}))["folders"], json!({}));
 }
 
+#[test]
+fn the_accounts_pane_moves_runs_and_keeps_up() {
+    let host = Host::start();
+    host.parts(claude_checked);
+    host.run("rota.swap", json!({"to": "work"}));
+    let view = host.node.open_pane("accounts", Value::Null).unwrap();
+    assert_eq!(view.title().as_deref(), Some("Claude accounts"));
+    assert_eq!(view.block("head").unwrap()["subtitle"], "New runs start on work · it swaps at 90%");
+    let work = view.block("account:work").unwrap();
+    assert_eq!(work["children"][0]["subtitle"], "monthly spend 40% ($80.50 of $200) · runs start here");
+    assert_eq!(
+        (work["children"][1]["label"].as_str(), work["children"][1]["value"].as_f64()),
+        (Some("5-hour"), Some(20.0))
+    );
+    let buttons = view.block("actions").unwrap()["buttons"].clone();
+    assert!(buttons.as_array().unwrap().iter().any(|b| b["id"] == "use:spare"), "{buttons}");
+
+    // a button moves new runs, and the pane follows in place: patches, never all of it again
+    view.input(json!({"kind": "tap", "block": "actions", "value": "use:spare"})).unwrap();
+    assert_eq!(view.block("head").unwrap()["subtitle"], "New runs start on spare · it swaps at 90%");
+    assert_eq!(host.account(json!({"run": 1, "client": "claude"})), "spare");
+    assert!(view.frames().iter().all(|(method, _)| method == "pane.patch"), "{:?}", view.frames());
+    view.input(json!({"kind": "tap", "block": "actions", "value": "swap"})).unwrap();
+
+    let refused = view.input(json!({"kind": "tap", "block": "actions", "value": "use:old"})).unwrap_err();
+    assert!(refused.message.contains("token was refused"), "{refused}");
+    let refused = view.input(json!({"kind": "tap", "block": "head", "value": null})).unwrap_err();
+    assert_eq!(refused.message, "only the buttons do something here");
+    assert!(view.problems().is_empty(), "{:?}", view.problems());
+}
+
 /// A Codex session as Codex writes it, with the account's windows in its rate_limits.
 fn rollout(home: &Path, used: f64, window: u64) {
     let day = home.join("sessions/2026/10/05");
