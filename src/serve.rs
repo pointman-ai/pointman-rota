@@ -572,6 +572,27 @@ impl Rota {
         self.signins.code(&text(p.get("session")), &text(p.get("code")), Duration::from_secs(120), keep.as_deref())
     }
 
+    /// `/rota add work` as a post (an agent's, or an app's from before a command could name its form): the
+    /// apps open the account form for it, since a token or a sign-in code never goes in a post, so this
+    /// says where to add one.
+    fn add(&self, params: &Value) -> anyhow::Result<Value> {
+        let name = if truthy(params.get("name")) { label_of(params, "name")? } else { "work".into() };
+        let toks = self.all_tokens();
+        let there = {
+            let st = self.state();
+            toks.iter().any(|(l, _)| *l == name || st.shown(l) == name)
+        };
+        let again =
+            if there { format!("{name} is here already: adding it again signs it in again. ") } else { String::new() };
+        Ok(self.answer(format!(
+            "{again}A Claude account is added in the Pointman app, so its sign-in never goes in a post: type \
+             `/rota add {name}` there and tap Sign in. Or on {}: `claude setup-token` signed in as the account, \
+             then `{} add {name}` and paste the token.",
+            self.machine(),
+            this_program()
+        )))
+    }
+
     /// New runs start on this account from now on (or, with none named, the one with the most room), and
     /// stay there until it's full, as after any move.
     fn swap(&self, params: &Value) -> anyhow::Result<Value> {
@@ -717,9 +738,10 @@ pub fn serve() -> anyhow::Result<()> {
         let r = rota.clone();
         ext.method(name, move |p: Value| f(&r, &p));
     }
-    let commands: [(&str, Answer); 6] = [
+    let commands: [(&str, Answer); 7] = [
         ("rota.status", |r, _| Ok(r.summary())),
         ("rota.usage", |r, _| Ok(r.usage())),
+        ("rota.add", Rota::add),
         ("rota.swap", Rota::swap),
         ("rota.rename", Rota::rename),
         ("rota.agent", Rota::agent),

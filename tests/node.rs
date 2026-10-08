@@ -252,6 +252,12 @@ fn swapping_renaming_and_folders() {
         .contains("another account here is called spare"));
     assert!(host.refuses("rota.rename", json!({"from": "gone", "to": "x"})).contains("no account 'gone'"));
     assert!(host.refuses("rota.rename", json!({"from": "work", "to": "Not A Name"})).contains("to:"));
+    // `/rota add` posted (an agent, an older app) says where accounts are added: never with a token in a post
+    let got = host.run("rota.add", json!({"name": "Night"}));
+    let said = got["message"].as_str().unwrap_or_default();
+    assert!(said.contains("`/rota add night` there and tap Sign in") && said.contains("Or on studio:"), "{said}");
+    assert!(host.run("rota.add", json!({"name": "team"}))["message"].as_str().unwrap().starts_with("team is here"));
+    assert!(host.refuses("rota.add", json!({"name": "no good"})).contains("name:"));
     // back to its label: the name goes
     host.run("rota.rename", json!({"from": "team", "to": "spare"}));
     host.run("rota.rename", json!({"from": "james-max", "to": "default"}));

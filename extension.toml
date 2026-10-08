@@ -1,7 +1,7 @@
 [extension]
 id = "rota"
 name = "Rota"
-version = "0.9.1"
+version = "0.9.2"
 publisher = "aurelio"
 summary = "Claude accounts taken in turns: each run starts on the account with the most room left."
 node = ">=0.1,<1"
@@ -64,6 +64,16 @@ title = "Each account's use"
 params = { type = "object", properties = {} }
 slash = "usage"
 summary = "Each Claude account's 5-hour and weekly use, and which one new runs start on"
+
+# `/rota add` is rota's own command (James, Pointman thread 1018 [4459]): the apps open the account form for
+# it, so Sign in or a pasted token goes into the vault and never into a post
+[[commands]]
+kind = "rota.add"
+title = "Add a Claude account"
+params = { type = "object", properties = { name = { type = "string", description = "What to call it (work): lowercase letters, digits, . _ -" } } }
+slash = "add"
+form = "account"
+summary = "Add a Claude account: sign in to it, or paste a token from claude setup-token"
 
 [[commands]]
 kind = "rota.swap"

@@ -83,7 +83,8 @@ machines show rota behind until they run `pointman upgrade`.
 
 Until it has an account besides the machine's own login, rota shows "No Claude account yet" on Machines and
 in Needs you. Run `claude setup-token` signed in as the other account and copy the token it prints, then tap
-**Add** there, or type `/rota add` in any thread, and paste it with a label (`work`). The app seals it for
+**Add** there, or type `/rota add` in any thread (rota's own command: the app opens its account form for it,
+so nothing is posted), and paste it with a label (`work`). The app seals it for
 your machines as the vault item `rota.<label>`, and rota picks it up within a minute. (`/secrets add rota.work`
 does the same.)
 
