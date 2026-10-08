@@ -27,7 +27,8 @@ extension its node runs, and the rest of its subcommands are the command line fo
 - **Seeing it:** `/rota usage` in any thread answers with a chart of each account's 5-hour and weekly use, the
   account runs start on in its title, a line for each, and buttons that move new runs (Pointman's slash
   commands and blocks, MB-276). The same chart is a panel people can add to the telemetry board
-  (`rota/accounts@<machine>`). Each account is also a part under rota in `pointman health` and on the apps'
+  (`rota/accounts@<machine>`). The `accounts` pane (Pointman's docs/dev/panes.md) shows each account with
+  a meter for each window and the buttons, and moves in place as checks and swaps come in. Each account is also a part under rota in `pointman health` and on the apps'
   Machines page ("5h 46% (resets 14:30) · week 37% (resets Tue 03:00) · runs start here"). Agents need
   nothing: rota moves their runs itself (James, Pointman thread 2255 [4082]), and they can post
   `/rota usage` like anyone.
