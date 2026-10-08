@@ -116,4 +116,4 @@ refresh = ["rota.accounts"]
 id = "accounts"
 title = "Claude accounts"
 format = "blocks"
-opens = ["command"]
+opens = ["command", "menu"]      # menu: picked by hand from the apps, with no target
