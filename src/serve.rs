@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -21,7 +22,9 @@ use crate::{codex, probe};
 
 /// The last swaps, for the machine's status.
 const MOVES_KEPT: usize = 10;
-/// How often the vault's rota.* names are looked at.
+/// How often the vault's rota.* names are looked at. A list older than this is still used while it's
+/// asked for again behind (each ask is a round trip to core, 0.2 s from the Mac, that a run's start waited
+/// on: Pointman thread 6216); one older than OPEN_EVERY is asked for first.
 const LIST_EVERY: Duration = Duration::from_secs(60);
 /// How long an opened token is kept before it's opened again (each open is logged).
 const OPEN_EVERY: Duration = Duration::from_secs(1800);
@@ -88,8 +91,36 @@ impl State {
 struct Vault {
     listed: Option<Instant>,
     names: Vec<String>,
+    /// The list being asked for behind.
+    asking: Option<Receiver<Result<Vec<String>, String>>>,
     opened: HashMap<String, (Instant, Option<String>)>,
     said: Option<String>,
+}
+
+/// What's done about the vault's list, from its age and whether it's being asked for already.
+#[derive(Debug, PartialEq)]
+enum Relist {
+    Now,
+    Behind,
+    Kept,
+}
+
+fn relist(age: Option<Duration>, asking: bool) -> Relist {
+    match age {
+        None => Relist::Now,
+        Some(age) if age > OPEN_EVERY => Relist::Now,
+        Some(age) if age > LIST_EVERY && !asking => Relist::Behind,
+        Some(_) => Relist::Kept,
+    }
+}
+
+/// The vault's rota.* names, as the node lists them.
+fn list(h: &Handle) -> Result<Vec<String>, String> {
+    let got = h.request("secret.list", json!({"prefix": "rota."})).map_err(|e| e.to_string())?;
+    Ok(got
+        .get("names")
+        .and_then(Value::as_array)
+        .map_or_else(Vec::new, |names| names.iter().filter_map(Value::as_str).map(String::from).collect()))
 }
 
 pub struct Rota {
@@ -208,24 +239,45 @@ impl Rota {
     fn vault_tokens(&self) -> Vec<(String, String)> {
         let names = {
             let mut v = self.vault.lock().unwrap_or_else(|e| e.into_inner());
-            if v.listed.is_none_or(|t| t.elapsed() > LIST_EVERY) {
-                v.listed = Some(Instant::now());
-                match self.h.request("secret.list", json!({"prefix": "rota."})) {
-                    Ok(got) => {
-                        v.names = got.get("names").and_then(Value::as_array).map_or_else(Vec::new, |names| {
-                            names.iter().filter_map(Value::as_str).map(String::from).collect()
-                        });
-                        v.said = None;
-                    }
-                    // an older node or core: the local file only
-                    Err(e) => {
-                        let e = e.to_string();
-                        if v.said.as_ref() != Some(&e) {
-                            self.h.log(format!("no accounts from the vault: {e}"));
-                            v.said = Some(e);
-                        }
+            let mut got = None;
+            if let Some(asking) = &v.asking {
+                match asking.try_recv() {
+                    Ok(answer) => got = Some(answer),
+                    Err(TryRecvError::Disconnected) => v.asking = None,
+                    Err(TryRecvError::Empty) => {}
+                }
+            }
+            if got.is_some() {
+                v.asking = None;
+            }
+            match relist(v.listed.map(|t| t.elapsed()), v.asking.is_some()) {
+                Relist::Now => {
+                    v.listed = Some(Instant::now());
+                    v.asking = None;
+                    got = Some(list(&self.h));
+                }
+                Relist::Behind => {
+                    v.listed = Some(Instant::now());
+                    let (tx, rx) = mpsc::channel();
+                    v.asking = Some(rx);
+                    let h = self.h.clone();
+                    std::thread::spawn(move || tx.send(list(&h)));
+                }
+                Relist::Kept => {}
+            }
+            match got {
+                Some(Ok(names)) => {
+                    v.names = names;
+                    v.said = None;
+                }
+                // an older node or core: the local file only
+                Some(Err(e)) => {
+                    if v.said.as_ref() != Some(&e) {
+                        self.h.log(format!("no accounts from the vault: {e}"));
+                        v.said = Some(e);
                     }
                 }
+                None => {}
             }
             v.names.clone()
         };
@@ -817,4 +869,19 @@ pub fn serve() -> anyhow::Result<()> {
     let r = rota.clone();
     ext.every(Duration::from_secs(60), move |_: &Handle| r.check_idle(), "checks");
     ext.run()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_vaults_list_is_asked_for_first_then_behind_and_first_again_when_too_old() {
+        let secs = |s: u64| Some(Duration::from_secs(s));
+        assert_eq!(relist(None, false), Relist::Now);
+        assert_eq!(relist(secs(10), false), Relist::Kept);
+        assert_eq!(relist(secs(61), false), Relist::Behind);
+        assert_eq!(relist(secs(61), true), Relist::Kept, "asked for once");
+        assert_eq!(relist(secs(1801), true), Relist::Now);
+    }
 }
