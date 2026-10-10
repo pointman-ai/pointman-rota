@@ -1,7 +1,7 @@
 [extension]
 id = "rota"
 name = "Rota"
-version = "0.10.1"
+version = "0.11.0"
 publisher = "aurelio"
 summary = "Claude accounts taken in turns: each run starts on the account with the most room left."
 node = ">=0.1,<1"
@@ -51,7 +51,7 @@ description = "After moving runs to another account, stay on it this long, unles
 type = "integer"
 minimum = 5
 default = 30
-description = "How often an account nothing has run on is checked, with a one-line Haiku run"
+description = "How often an account nothing has run on is checked, with a one-line Haiku run, and each Codex account asked for its usage"
 
 [[commands]]
 kind = "rota.status"
@@ -63,7 +63,7 @@ kind = "rota.usage"
 title = "Each account's use"
 params = { type = "object", properties = {} }
 slash = "usage"
-summary = "Each Claude account's 5-hour and weekly use, and which one new runs start on"
+summary = "Each Claude and Codex account's 5-hour and weekly use, and which one new runs start on"
 
 # `/rota add` is rota's own command (James, Pointman thread 1018 [4459]): the apps open the account form for
 # it, so Sign in or a pasted token goes into the vault and never into a post
@@ -114,6 +114,6 @@ refresh = ["rota.accounts"]
 # move new runs; it moves as checks and swaps come in
 [[panes]]
 id = "accounts"
-title = "Claude accounts"
+title = "Accounts"
 format = "blocks"
 opens = ["command", "menu"]      # menu: picked by hand from the apps, with no target

@@ -402,8 +402,20 @@ impl Rota {
             .iter()
             .map(|label| {
                 let seen = cx.seen.get(label);
-                json!({"label": label, "own_login": label == DEFAULT, "used": accounts::used(seen, Some(now)),
-                       "line": accounts::describe(label, seen, cx.current.as_deref(), Some(now))})
+                let mut row = json!({"label": label, "id": format!("codex.{label}"), "own_login": label == DEFAULT,
+                                     "used": accounts::used(seen, Some(now))});
+                if let Some(Value::Object(known)) = seen.map(|s| serde_json::to_value(s).unwrap_or_default()) {
+                    for (k, v) in known {
+                        if ["five_hour", "seven_day", "status", "needs_auth", "checked_at", "codex"]
+                            .contains(&k.as_str())
+                        {
+                            row[k] = v;
+                        }
+                    }
+                }
+                // only the machine's own Codex runs pick accounts today: "runs start here" says nothing new
+                row["line"] = json!(accounts::describe(label, seen, None, Some(now)));
+                row
             })
             .collect();
         let named = |m: &BTreeMap<String, String>| -> BTreeMap<String, String> {
@@ -451,9 +463,52 @@ impl Rota {
         with_view(out, Some(&message))
     }
 
-    /// `/rota usage` and the telemetry panel (MB-276): the summary, with its text and blocks.
+    /// `/rota usage` and the telemetry panel (MB-276): the summary, with its text and blocks. Codex's
+    /// accounts are asked first when their numbers are over a minute old: that takes under a second.
     pub fn usage(&self) -> Value {
+        self.check_codex(60.0);
         with_view(self.summary(), None)
+    }
+
+    /// Ask Codex for the usage of each signed-in Codex account whose numbers are older than `every`
+    /// seconds (James, Pointman thread 3359 [7694]), and tell the apps when any came in.
+    fn check_codex(&self, every: f64) {
+        let labels = codex::labels(&accounts::load_store(None));
+        let mut told = false;
+        for label in labels.into_iter().filter(|l| codex::signed_in(l)) {
+            let checked = self.state().codex.seen.get(&label).and_then(|s| s.checked_at).unwrap_or(0.0);
+            if now() - checked < every {
+                continue;
+            }
+            let got = codex::check(&label, None, Duration::from_secs(30));
+            let mut st = self.state();
+            let seen = st.codex.seen.entry(label.clone()).or_default();
+            match got {
+                Ok(got) => {
+                    seen.five_hour = got.five_hour;
+                    seen.seven_day = got.seven_day;
+                    seen.status = got.status;
+                    seen.blocked_until = got.blocked_until;
+                    seen.codex = got.codex;
+                    seen.needs_auth = Some(false);
+                    seen.error = None;
+                }
+                Err(e) => {
+                    let e = format!("{e:#}");
+                    if seen.error.as_ref() != Some(&e) {
+                        self.h.log(format!("couldn't ask Codex for {label}'s usage: {e}"));
+                    }
+                    seen.needs_auth = Some(probe::refused(Some(&e)));
+                    seen.error = Some(e);
+                }
+            }
+            seen.checked_at = Some(now());
+            self.save_state(&st);
+            told = true;
+        }
+        if told {
+            self.tell();
+        }
     }
 
     fn note(&self, label: &str, limits: Option<&Value>, error: Option<String>, refused: bool) {
@@ -825,6 +880,7 @@ impl Rota {
                 }
             }
         }
+        self.check_codex(every);
     }
 }
 
@@ -864,7 +920,7 @@ pub fn serve() -> anyhow::Result<()> {
     ext.pane("accounts", move |p: &Pane| {
         let tapped = r.clone();
         p.on_input(move |_: &Pane, event: &Value| tapped.tapped(event));
-        Ok(json!({"title": "Claude accounts", "blocks": crate::view::pane(&r.summary(), now())}))
+        Ok(json!({"title": "Accounts", "blocks": crate::view::pane(&r.summary(), now())}))
     });
     let r = rota.clone();
     ext.every(Duration::from_secs(60), move |_: &Handle| r.check_idle(), "checks");

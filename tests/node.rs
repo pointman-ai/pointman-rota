@@ -75,6 +75,8 @@ impl Host {
         fs::create_dir(&bin).unwrap();
         fs::write(bin.join("claude"), FAKE).unwrap();
         fs::set_permissions(bin.join("claude"), fs::Permissions::from_mode(0o755)).unwrap();
+        fs::write(bin.join("codex"), FAKE_CODEX).unwrap();
+        fs::set_permissions(bin.join("codex"), fs::Permissions::from_mode(0o755)).unwrap();
         let store = tmp.path().join("rota.json");
         let bad = format!("sk-ant-oat01-{}", "bad".repeat(10));
         let account = |label: &str, token: String| Account { token: Some(token), ..Account::new(label) };
@@ -313,7 +315,7 @@ fn the_accounts_pane_moves_runs_and_keeps_up() {
     host.parts(claude_checked);
     host.run("rota.swap", json!({"to": "work"}));
     let view = host.node.open_pane("accounts", Value::Null).unwrap();
-    assert_eq!(view.title().as_deref(), Some("Claude accounts"));
+    assert_eq!(view.title().as_deref(), Some("Accounts")); // Claude's, then Codex's
     assert_eq!(view.block("head").unwrap()["subtitle"], "New runs start on work · it swaps at 90%");
     let work = view.block("account:work").unwrap();
     assert_eq!(work["children"][0]["subtitle"], "monthly spend 40% ($80.50 of $200) · runs start here");
@@ -336,6 +338,43 @@ fn the_accounts_pane_moves_runs_and_keeps_up() {
     let refused = view.input(json!({"kind": "tap", "block": "head", "value": null})).unwrap_err();
     assert_eq!(refused.message, "only the buttons do something here");
     assert!(view.problems().is_empty(), "{:?}", view.problems());
+}
+
+/// A Codex that answers its app server's JSON-RPC as the real one does, from `$CODEX_HOME/usage.json`, or
+/// says it isn't signed in (tests/accounts.rs has the same).
+const FAKE_CODEX: &str = r#"#!/bin/sh
+[ "$1" = "app-server" ] || exit 2
+while IFS= read -r line; do
+  case "$line" in
+    *'"id":1'*) echo '{"jsonrpc":"2.0","id":1,"result":{"userAgent":"fake"}}' ;;
+    *'"id":2'*) if [ -f "$CODEX_HOME/usage.json" ]; then
+                  printf '{"jsonrpc":"2.0","id":2,"result":%s}\n' "$(cat "$CODEX_HOME/usage.json")"
+                else
+                  echo '{"jsonrpc":"2.0","id":2,"error":{"code":-32600,"message":"Not logged in to ChatGPT"}}'
+                fi ;;
+  esac
+done
+"#;
+
+/// James, Pointman thread 3359 [7694]: `/rota usage` asks Codex for the usage of each signed-in Codex
+/// account, as its /status shows it, and health shows it too.
+#[test]
+fn codex_usage_in_rota_usage() {
+    let host = Host::start();
+    let own = host.path("codex-own");
+    fs::create_dir(&own).unwrap();
+    fs::write(own.join("auth.json"), "{}").unwrap();
+    let limits = json!({"primary": {"usedPercent": 7, "windowDurationMins": 10080, "resetsAt": 4102444800u64},
+                        "planType": "plus", "credits": {"hasCredits": false, "unlimited": false}});
+    fs::write(own.join("usage.json"), json!({"ordinaryUsageAllowed": true, "rateLimits": limits}).to_string()).unwrap();
+    let got = host.run("rota.usage", json!({}));
+    let codex = &got["codex"]["accounts"][0];
+    assert_eq!((codex["id"].as_str(), codex["seven_day"]["used"].as_f64()), (Some("codex.default"), Some(7.0)));
+    let line = codex["line"].as_str().unwrap();
+    assert!(line.starts_with("week 7% (resets ") && line.ends_with(" · Plus plan"), "{line}");
+    assert!(got["text"].as_str().unwrap().contains(&format!("**Codex**\n- **default** · {line}")), "{got}");
+    let parts = host.parts(|g| g.contains_key("codex.default"));
+    assert_eq!(why(&parts, "codex.default"), line);
 }
 
 /// A Codex session as Codex writes it, with the account's windows in its rate_limits.

@@ -227,3 +227,83 @@ fn real_check() {
     let alone = rota::probe::usage(None, None, std::time::Duration::from_secs(60)).unwrap();
     assert_eq!((alone.limits, accounts::credits(alone.usage.as_ref(), 1.0)), (None, credits));
 }
+
+/// Codex's app server as `account/rateLimits/read` answers (from a real one, 11 Oct 2026; ids cut).
+fn codex_usage(used: i64, reached: Option<&str>) -> Value {
+    let limits = json!({"limitId": "codex", "planType": "self_serve_business_prolite", "spendControlReached": false,
+                        "primary": {"usedPercent": used, "windowDurationMins": 10080, "resetsAt": 4102444800u64},
+                        "secondary": {"usedPercent": 3, "windowDurationMins": 300, "resetsAt": 4102400000u64},
+                        "credits": {"hasCredits": false, "unlimited": false, "balance": null},
+                        "rateLimitReachedType": reached});
+    json!({"ordinaryUsageAllowed": reached.is_none(), "rateLimits": limits, "rateLimitsByLimitId": {"codex": limits},
+           "rateLimitResetCredits": {"availableCount": 3, "credits": null}, "rateLimitUpsell": null})
+}
+
+/// James, Pointman thread 3359 [7694]: a Codex account's usage as Codex's /status shows it.
+#[test]
+fn codex_usage_as_its_app_server_gives_it() {
+    let got = rota::codex::read(&codex_usage(1, None));
+    assert_eq!(got.seven_day, Some(Window { used: 1.0, resets: Some(RESETS) }));
+    assert_eq!(got.five_hour, Some(Window { used: 3.0, resets: Some(4102400000.0) }));
+    assert_eq!((got.status.as_deref(), got.blocked_until), (Some("allowed"), None));
+    let line = accounts::describe("default", Some(&got), None, Some(1.0));
+    assert!(line.starts_with("5h 3% (resets ") && line.contains(" · week 1% (resets "), "{line}");
+    assert!(line.ends_with(" · Business plan · 3 free resets"), "{line}");
+    // out of room: blocked until its full window resets, so the rule skips it
+    let full = rota::codex::read(&codex_usage(100, Some("rate_limit_reached")));
+    assert_eq!((full.status.as_deref(), full.blocked_until), (Some("rate_limit_reached"), Some(RESETS)));
+    assert_eq!(accounts::used(Some(&full), Some(1.0)), Some(100.0));
+    assert!(accounts::describe("default", Some(&full), None, Some(1.0)).contains(" · limit reached · "));
+    // credits, and a plan Codex doesn't know
+    let mut rich = codex_usage(5, None);
+    rich["rateLimits"]["credits"] = json!({"hasCredits": true, "unlimited": false, "balance": "120"});
+    rich["rateLimits"]["planType"] = json!("pro");
+    rich["rateLimitsByLimitId"] = Value::Null;
+    rich["rateLimitResetCredits"]["availableCount"] = json!(1);
+    let line = accounts::describe("x", Some(&rota::codex::read(&rich)), None, Some(1.0));
+    assert!(line.ends_with(" · Pro plan · 120 credits · 1 free reset"), "{line}");
+}
+
+/// A Codex that answers its app server's JSON-RPC as the real one does, from `$CODEX_HOME/usage.json`, or
+/// says it isn't signed in.
+const FAKE_CODEX: &str = r#"#!/bin/sh
+[ "$1" = "app-server" ] || exit 2
+while IFS= read -r line; do
+  case "$line" in
+    *'"id":1'*) echo '{"jsonrpc":"2.0","method":"remoteControl/status/changed","params":{}}'
+                echo '{"jsonrpc":"2.0","id":1,"result":{"userAgent":"fake"}}' ;;
+    *'"id":2'*) if [ -f "$CODEX_HOME/usage.json" ]; then
+                  printf '{"jsonrpc":"2.0","id":2,"result":%s}\n' "$(cat "$CODEX_HOME/usage.json")"
+                else
+                  echo '{"jsonrpc":"2.0","id":2,"error":{"code":-32600,"message":"Not logged in to ChatGPT"}}'
+                fi ;;
+  esac
+done
+"#;
+
+#[test]
+fn a_codex_check_asks_its_app_server_in_the_accounts_home() {
+    let tmp = TempDir::new().unwrap();
+    let codex = tmp.path().join("codex");
+    fs::write(&codex, FAKE_CODEX).unwrap();
+    fs::set_permissions(&codex, fs::Permissions::from_mode(0o755)).unwrap();
+    let homes = tmp.path().join("homes");
+    fs::create_dir_all(homes.join("spare")).unwrap();
+    fs::write(homes.join("spare/usage.json"), codex_usage(42, None).to_string()).unwrap();
+    std::env::set_var("ROTA_CODEX_HOMES", &homes);
+    let got = rota::codex::check("spare", Some(&codex), std::time::Duration::from_secs(10)).unwrap();
+    assert_eq!(got.seven_day.map(|w| w.used), Some(42.0));
+    let e = rota::codex::check("none", Some(&codex), std::time::Duration::from_secs(10)).unwrap_err().to_string();
+    assert_eq!(e, "Codex: Not logged in to ChatGPT");
+    assert!(rota::probe::refused(Some(&e)), "an account to sign in again");
+}
+
+/// This machine's own Codex login, asked for real: by hand,
+/// `cargo test --test accounts real_codex_check -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn real_codex_check() {
+    let got = rota::codex::check(accounts::DEFAULT, None, std::time::Duration::from_secs(30)).unwrap();
+    println!("{}", accounts::describe(accounts::DEFAULT, Some(&got), None, None));
+    assert!(got.codex.is_some_and(|c| c.plan.is_some()));
+}

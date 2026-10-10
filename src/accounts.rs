@@ -159,6 +159,70 @@ pub struct Seen {
     /// When Claude Code was last asked for its usage, answered or not.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage_at: Option<f64>,
+    /// A Codex account's plan, credits and free resets, as Codex's app server gave them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex: Option<CodexPlan>,
+}
+
+/// What Codex says of an account beside its windows (`account/rateLimits/read`; James, Pointman thread 3359
+/// [7694]): its ChatGPT plan, its Codex credits, and the free resets it has left.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct CodexPlan {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
+    #[serde(default)]
+    pub has_credits: bool,
+    #[serde(default)]
+    pub unlimited: bool,
+    /// Its credits, as Codex words the balance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub balance: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub free_resets: Option<i64>,
+}
+
+/// A plan as people know it: `pro` is Pro, `self_serve_business_prolite` is Business.
+fn plan_name(plan: &str) -> String {
+    let named = [
+        ("enterprise", "Enterprise"),
+        ("business", "Business"),
+        ("edu", "Edu"),
+        ("prolite", "Pro Lite"),
+        ("promax", "Pro Max"),
+    ];
+    if let Some((_, name)) = named.iter().find(|(key, _)| plan.contains(key)) {
+        return name.to_string();
+    }
+    match plan {
+        "free" => "Free".into(),
+        "go" => "Go".into(),
+        "plus" => "Plus".into(),
+        "pro" => "Pro".into(),
+        "team" => "Team".into(),
+        other => other.replace('_', " "),
+    }
+}
+
+/// What Codex's word adds to an account's line: "Business plan · 3 free resets".
+fn codex_bits(c: &CodexPlan) -> Vec<String> {
+    let mut bits = vec![];
+    if let Some(plan) = c.plan.as_deref().filter(|p| *p != "unknown") {
+        bits.push(format!("{} plan", plan_name(plan)));
+    }
+    if c.unlimited {
+        bits.push("unlimited credits".into());
+    } else if c.has_credits {
+        bits.push(match c.balance.as_deref() {
+            Some(b) => format!("{b} credits"),
+            None => "has credits".into(),
+        });
+    }
+    match c.free_resets {
+        Some(1) => bits.push("1 free reset".into()),
+        Some(n) if n > 1 => bits.push(format!("{n} free resets")),
+        _ => {}
+    }
+    bits
 }
 
 /// An account's usage credits this month, as Claude Code's `/usage` shows them (James, Pointman thread 649
@@ -385,6 +449,12 @@ pub fn describe(label: &str, seen: Option<&Seen>, current: Option<&str>, now: Op
             }
             .into(),
         );
+    }
+    if let Some(c) = seen.and_then(|s| s.codex.as_ref()) {
+        if seen.and_then(|s| s.blocked_until).is_some_and(|t| now < t) {
+            bits.push("limit reached".into());
+        }
+        bits.extend(codex_bits(c));
     }
     if seen.is_some_and(Seen::refused) {
         bits.push("its token was refused".into());

@@ -54,6 +54,13 @@ extension its node runs, and the rest of its subcommands are the command line fo
   every `check_minutes`, which takes no turn. It's `credits` in rota's summary. Where Claude Code has no
   usage for an account, its runs' limit events still say whether credits are on, in use, off, or at their
   limit (`extra`).
+- **Codex's usage** (James, Pointman thread 3359 [7694]): `/rota usage`, the `accounts` pane and health
+  show each signed-in Codex account under its own heading, as Codex's own `/status` shows it: its 5-hour and
+  weekly windows, its plan, its credits and any free resets ("week 1% (resets Thu 15:41) · Business plan · 3
+  free resets"). Rota asks Codex's app server for it (`codex app-server`, `account/rateLimits/read`, in that
+  account's Codex home), which takes no turn and under a second: every `check_minutes`, and for `/rota usage`
+  when the numbers are over a minute old. So the machine's own Codex counts what you use in a terminal too.
+  Only the machine's own Codex login and accounts added with `rota codex add` are asked.
 - **A warning isn't a limit:** `allowed_warning` (a window past a mark, like the week at 52%) still takes
   runs; only a status that isn't `allowed…` blocks an account until its reset.
 - **Cooldown:** an account runs moved off sits out 10 minutes (`cooldown_minutes`) even if it looks fine
