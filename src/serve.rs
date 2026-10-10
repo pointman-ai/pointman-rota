@@ -271,13 +271,11 @@ impl Rota {
                     v.said = None;
                 }
                 // an older node or core: the local file only
-                Some(Err(e)) => {
-                    if v.said.as_ref() != Some(&e) {
-                        self.h.log(format!("no accounts from the vault: {e}"));
-                        v.said = Some(e);
-                    }
+                Some(Err(e)) if v.said.as_ref() != Some(&e) => {
+                    self.h.log(format!("no accounts from the vault: {e}"));
+                    v.said = Some(e);
                 }
-                None => {}
+                Some(Err(_)) | None => {}
             }
             v.names.clone()
         };
