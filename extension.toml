@@ -117,3 +117,9 @@ id = "accounts"
 title = "Accounts"
 format = "blocks"
 opens = ["command", "menu"]      # menu: picked by hand from the apps, with no target
+
+# and as a section of Today (Pointman's docs/dev/today.md): the same meters, on the first screen of the day
+[[today]]
+id = "accounts"
+title = "Claude accounts"
+pane = "accounts"                # opened with no target, as from the menu
