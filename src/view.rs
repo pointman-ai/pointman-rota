@@ -232,10 +232,10 @@ mod tests {
         assert_eq!(blocks[2]["children"].as_array().unwrap().len(), 1);
         assert_eq!(blocks[2]["children"][0]["subtitle"], "not checked yet");
         assert_eq!(blocks[3]["children"][1]["tone"], "bad"); // old, at 99.5%
-        // adding one: rota's credentials form, opened in place in the pane
         assert_eq!(
             blocks[4],
-            json!({"type": "credential", "id": "add", "form": "account", "title": "Add a Claude account"})
+            json!({"type": "credential", "id": "add", "form": "account", "title": "Add a Claude account"}),
+            "adding one: rota's credentials form, opened in place in the pane"
         );
         let ids: Vec<&str> =
             blocks[5]["buttons"].as_array().unwrap().iter().map(|b| b["id"].as_str().unwrap()).collect();
