@@ -35,8 +35,10 @@ static CODE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[A-Za-z0-9#_.~-]{8
 
 /// Claude Code's setup-token, running in a terminal of its own.
 struct Session {
-    child: Child,
-    pty: OwnedFd,
+    /// taken when the session ends, to be reaped in the background
+    child: Option<Child>,
+    /// our end of its terminal: closed first when the session ends
+    pty: Option<OwnedFd>,
     _folder: TempDir,
     started: Instant,
     raw: Vec<u8>,
@@ -51,7 +53,7 @@ impl Session {
             if until(self) {
                 break;
             }
-            let mut poll = libc::pollfd { fd: self.pty.as_raw_fd(), events: libc::POLLIN, revents: 0 };
+            let mut poll = libc::pollfd { fd: self.fd(), events: libc::POLLIN, revents: 0 };
             // SAFETY: one pollfd, and a buffer as long as the length given
             let ready = unsafe { libc::poll(&mut poll, 1, 250) };
             if ready < 0 && io::Error::last_os_error().kind() != io::ErrorKind::Interrupted {
@@ -60,13 +62,17 @@ impl Session {
             if ready <= 0 {
                 continue;
             }
-            let n = unsafe { libc::read(self.pty.as_raw_fd(), buf.as_mut_ptr().cast(), buf.len()) };
+            let n = unsafe { libc::read(self.fd(), buf.as_mut_ptr().cast(), buf.len()) };
             if n <= 0 {
                 break;
             }
             self.raw.extend_from_slice(&buf[..n as usize]);
         }
         self.text()
+    }
+
+    fn fd(&self) -> libc::c_int {
+        self.pty.as_ref().map_or(-1, AsRawFd::as_raw_fd)
     }
 
     fn raw_text(&self) -> String {
@@ -86,7 +92,7 @@ impl Session {
     fn write(&self, bytes: &[u8]) -> io::Result<()> {
         let mut at = 0;
         while at < bytes.len() {
-            let n = unsafe { libc::write(self.pty.as_raw_fd(), bytes[at..].as_ptr().cast(), bytes.len() - at) };
+            let n = unsafe { libc::write(self.fd(), bytes[at..].as_ptr().cast(), bytes.len() - at) };
             if n < 0 {
                 return Err(io::Error::last_os_error());
             }
@@ -97,9 +103,19 @@ impl Session {
 }
 
 impl Drop for Session {
+    /// Ends setup-token without waiting on it. Our end of its terminal closes first: on macOS a program
+    /// killed with output still unread can't finish closing its terminal, so waiting on it with our end open
+    /// waited forever (12 Oct: the token was made, and `code` never answered it). Its exit is reaped in the
+    /// background, so nothing that answers the node ever waits on it.
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        let child = self.child.take();
+        if let Some(mut c) = child {
+            let _ = c.kill();
+            drop(self.pty.take());
+            std::thread::spawn(move || {
+                let _ = c.wait();
+            });
+        }
     }
 }
 
@@ -346,7 +362,8 @@ impl SignIns {
         }
         let child = cmd.spawn()?;
         drop(cmd); // the program's side of the terminal closes here, so its end reads as the end
-        let mut s = Session { child, pty: ours, _folder: folder, started: Instant::now(), raw: vec![] };
+        let mut s =
+            Session { child: Some(child), pty: Some(ours), _folder: folder, started: Instant::now(), raw: vec![] };
         s.read(|s| manual_link(&s.raw_text()).is_some(), timeout);
         let Some(link) = manual_link(&s.raw_text()) else {
             bail!("Claude Code didn't give a sign-in link");
@@ -408,6 +425,43 @@ impl SignIns {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A program killed with its output still unread can't finish closing its terminal on macOS, so ending
+    /// a session must never wait on it (12 Oct: a sign-in's token was made and `code` never answered).
+    #[test]
+    fn ending_a_session_never_waits_on_its_program() {
+        let (ours, theirs) = pty().unwrap();
+        let mut cmd = Command::new("/bin/sh");
+        cmd.args(["-c", "while :; do echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; done"])
+            .stdin(Stdio::from(theirs.try_clone().unwrap()))
+            .stdout(Stdio::from(theirs.try_clone().unwrap()))
+            .stderr(Stdio::from(theirs));
+        // SAFETY: as in `start`: its own session, with the terminal as its controlling one
+        unsafe {
+            cmd.pre_exec(|| {
+                if libc::setsid() < 0 || libc::ioctl(0, libc::TIOCSCTTY as _, 0) < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let child = cmd.spawn().unwrap();
+        drop(cmd);
+        std::thread::sleep(Duration::from_millis(500)); // its output fills the terminal: nobody reads it
+        let s = Session {
+            child: Some(child),
+            pty: Some(ours),
+            _folder: tempfile::tempdir().unwrap(),
+            started: Instant::now(),
+            raw: vec![],
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            drop(s);
+            let _ = tx.send(());
+        });
+        assert!(rx.recv_timeout(Duration::from_secs(3)).is_ok(), "ending the session waited on its program");
+    }
 
     #[test]
     fn the_screen_keeps_letters_only_redrawn_where_they_changed() {
