@@ -124,9 +124,12 @@ pub fn pane(summary: &Value, now: f64) -> Value {
         vec![json!({"type": "heading", "id": "head", "level": 1, "text": "Claude accounts", "subtitle": subtitle})];
     if accounts.is_empty() {
         blocks.push(json!({"type": "empty", "id": "none", "title": "No Claude accounts yet",
-                           "note": "`/rota add` signs one in."}));
+                           "note": "Add one below, or `/rota add` in any thread."}));
     }
     blocks.extend(accounts.iter().map(|a| account_block(a, threshold, now)));
+    // adding one happens here, in the pane: the apps open rota's credentials form in place (Pointman's
+    // `credential` block), Sign in or paste, and a tap on `add` says it's in
+    blocks.push(json!({"type": "credential", "id": "add", "form": "account", "title": "Add a Claude account"}));
     let mut buttons = vec![];
     if accounts.len() > 1 {
         buttons.push(json!({"id": "swap", "title": "Swap now"}));
@@ -229,11 +232,17 @@ mod tests {
         assert_eq!(blocks[2]["children"].as_array().unwrap().len(), 1);
         assert_eq!(blocks[2]["children"][0]["subtitle"], "not checked yet");
         assert_eq!(blocks[3]["children"][1]["tone"], "bad"); // old, at 99.5%
+        // adding one: rota's credentials form, opened in place in the pane
+        assert_eq!(
+            blocks[4],
+            json!({"type": "credential", "id": "add", "form": "account", "title": "Add a Claude account"})
+        );
         let ids: Vec<&str> =
-            blocks[4]["buttons"].as_array().unwrap().iter().map(|b| b["id"].as_str().unwrap()).collect();
+            blocks[5]["buttons"].as_array().unwrap().iter().map(|b| b["id"].as_str().unwrap()).collect();
         assert_eq!(ids, ["swap", "use:spare", "use:old"]);
         let none = pane(&json!({"current": null, "accounts": []}), 0.0);
         assert_eq!(none[1]["type"], "empty");
+        assert_eq!(none[2]["type"], "credential");
     }
 
     /// James, Pointman thread 3359 [7694]: Codex's accounts after Claude's, in the text, the chart and the pane.

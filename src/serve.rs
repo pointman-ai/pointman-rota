@@ -439,9 +439,15 @@ impl Rota {
         self.h.event("rota.accounts", summary);
     }
 
-    /// A tap on the accounts pane's buttons: `swap` (the one with the most room), or `use:<label>`.
+    /// A tap on the accounts pane's buttons: `swap` (the one with the most room), or `use:<label>`. A tap on
+    /// `add` is the apps saying an account went into the vault from the pane: look at the vault again now.
     fn tapped(&self, event: &Value) -> anyhow::Result<()> {
         let button = event["value"].as_str().unwrap_or_default();
+        if event["kind"] == "tap" && event["block"] == "add" {
+            self.vault.lock().unwrap_or_else(|e| e.into_inner()).listed = None;
+            self.tell();
+            return Ok(());
+        }
         if event["kind"] != "tap" || event["block"] != "actions" {
             bail!(Refused::new("only the buttons do something here"));
         }

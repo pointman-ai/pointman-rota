@@ -104,7 +104,11 @@ so nothing is posted), and paste it with a label (`work`). The app seals it for
 your machines as the vault item `rota.<label>`, and rota picks it up within a minute. (`/secrets add rota.work`
 does the same.)
 
-Or tap **Sign in** on that sheet instead (MB-216, once core and the apps have their halves): rota runs
+Rota's accounts pane has its own **Add a Claude account** at the bottom (a `credential` block, Pointman's
+docs/dev/panes.md): the same form opens there, in the pane, and the pane shows the new account as soon as
+it's in. On the Mac the form never covers the window: from a thread it opens in that thread's panel.
+
+Or tap **Sign in** on that form instead (MB-216): rota runs
 `claude setup-token` on the machine and the app opens its sign-in link, on any device. Sign in as the other
 account, paste the code the page shows back into the app, and the token goes straight into the vault, sealed
 for your machines, without anyone seeing it.
