@@ -120,8 +120,7 @@ pub fn pane(summary: &Value, now: f64) -> Value {
         Some(c) => format!("New runs start on {c} · it swaps at {threshold:.0}%"),
         None => "No account picked yet".to_string(),
     };
-    let mut blocks =
-        vec![json!({"type": "heading", "id": "head", "level": 1, "text": "Claude accounts", "subtitle": subtitle})];
+    let mut blocks = vec![json!({"type": "heading", "id": "head", "level": 1, "text": "Rota", "subtitle": subtitle})];
     if accounts.is_empty() {
         blocks.push(json!({"type": "empty", "id": "none", "title": "No Claude accounts yet",
                            "note": "Add one below, or `/rota add` in any thread."}));

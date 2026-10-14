@@ -315,7 +315,7 @@ fn the_accounts_pane_moves_runs_and_keeps_up() {
     host.parts(claude_checked);
     host.run("rota.swap", json!({"to": "work"}));
     let view = host.node.open_pane("accounts", Value::Null).unwrap();
-    assert_eq!(view.title().as_deref(), Some("Accounts")); // Claude's, then Codex's
+    assert_eq!(view.title().as_deref(), Some("Rota")); // Claude's accounts, then Codex's (James, thread 8028 [8035])
     assert_eq!(view.block("head").unwrap()["subtitle"], "New runs start on work · it swaps at 90%");
     let work = view.block("account:work").unwrap();
     assert_eq!(work["children"][0]["subtitle"], "monthly spend 40% ($80.50 of $200) · runs start here");

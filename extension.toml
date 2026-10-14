@@ -1,7 +1,7 @@
 [extension]
 id = "rota"
 name = "Rota"
-version = "0.12.1"
+version = "0.13.0"
 publisher = "aurelio"
 summary = "Claude accounts taken in turns: each run starts on the account with the most room left."
 node = ">=0.1,<1"
@@ -105,15 +105,15 @@ description = "Each account's 5-hour and weekly use, when each resets, and which
 
 [[panels]]
 id = "accounts"
-title = "Claude accounts"
+title = "Rota"
 description = "How full each account's 5-hour and weekly windows are"
 command = "rota.usage"
 refresh = ["rota.accounts"]
 
 # the same as a pane (Pointman's docs/dev/panes.md): a meter for each account's windows, and buttons that
-# move new runs; it moves as checks and swaps come in
+# move new runs; it moves as checks and swaps come in. Called Rota (James, Pointman thread 8028 [8035])
 [[panes]]
 id = "accounts"
-title = "Accounts"
+title = "Rota"
 format = "blocks"
 opens = ["command", "menu"]      # menu: picked by hand from the apps, with no target

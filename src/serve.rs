@@ -924,7 +924,7 @@ pub fn serve() -> anyhow::Result<()> {
     ext.pane("accounts", move |p: &Pane| {
         let tapped = r.clone();
         p.on_input(move |_: &Pane, event: &Value| tapped.tapped(event));
-        Ok(json!({"title": "Accounts", "blocks": crate::view::pane(&r.summary(), now())}))
+        Ok(json!({"title": "Rota", "blocks": crate::view::pane(&r.summary(), now())}))
     });
     let r = rota.clone();
     ext.every(Duration::from_secs(60), move |_: &Handle| r.check_idle(), "checks");
