@@ -1,6 +1,6 @@
 [package]
 name = "rota"
-version = "0.13.1"
+version = "0.13.2"
 edition = "2021"
 description = "Claude accounts taken in turns: each run starts on the account with the most room left."
 license = "MIT"

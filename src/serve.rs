@@ -162,6 +162,9 @@ fn takes_runs(seen: Option<&Seen>, now: Option<f64>) -> bool {
 /// Why runs moved off an account, in a few words.
 fn why_left(label: Option<&str>, seen: Option<&Seen>) -> String {
     let Some(label) = label else { return "first pick".into() };
+    if seen.is_some_and(|s| s.refused() && s.no_login) {
+        return format!("{label} has no Claude login here");
+    }
     if seen.is_some_and(Seen::refused) {
         return format!("{label}'s token was refused");
     }
@@ -184,9 +187,11 @@ fn label_of(p: &Value, key: &str) -> anyhow::Result<String> {
     Ok(label)
 }
 
-/// How a part is doing in `pointman health`, from how full it is and whether its token was refused.
+/// How a part is doing in `pointman health`, from how full it is and whether its token was refused. The
+/// machine's own login, when there's none, is unknown, as the node's own part for it says.
 fn part_state(seen: &Seen, full: Option<f64>) -> &'static str {
     match full {
+        _ if seen.refused() && seen.no_login => "unknown",
         _ if seen.refused() => "failing",
         Some(f) if f >= 100.0 => "failing",
         None => "unknown",
@@ -516,6 +521,8 @@ impl Rota {
     }
 
     fn note(&self, label: &str, limits: Option<&Value>, error: Option<String>, refused: bool) {
+        // the machine's own login refused: is there one at all? (EXT-44: a Mac signed in through rota only)
+        let no_login = refused && label == DEFAULT && probe::signed_in(None, Duration::from_secs(20)) == Some(false);
         {
             let mut st = self.state();
             let seen = st.seen.entry(label.to_string()).or_default();
@@ -527,8 +534,10 @@ impl Rota {
                 seen.blocked_until = got.blocked_until;
                 seen.extra = got.extra.or(seen.extra.take());
                 seen.needs_auth = Some(false);
+                seen.no_login = false;
             } else if refused {
                 seen.needs_auth = Some(true);
+                seen.no_login = no_login;
             }
             seen.checked_at = Some(now());
             seen.error = error;
@@ -663,14 +672,14 @@ impl Rota {
                 }
             }
             out.push(json!({"id": label, "kind": "account", "name": format!("Claude: {}", st.shown(label)),
-                            "state": part_state(&seen, full), "needs": if seen.refused() { vec!["auth"] } else { vec![] },
+                            "state": part_state(&seen, full), "needs": if seen.needs_sign_in() { vec!["auth"] } else { vec![] },
                             "why": why}));
         }
         for label in codex_labels {
             let seen = st.codex.seen.get(&label).cloned().unwrap_or_default();
             let full = accounts::used(Some(&seen), Some(now));
             out.push(json!({"id": format!("codex.{label}"), "kind": "account", "name": format!("Codex: {label}"),
-                            "state": part_state(&seen, full), "needs": if seen.refused() { vec!["auth"] } else { vec![] },
+                            "state": part_state(&seen, full), "needs": if seen.needs_sign_in() { vec!["auth"] } else { vec![] },
                             "why": accounts::describe(&label, Some(&seen), st.codex.current.as_deref(), Some(now))}));
         }
         Value::Array(out)
@@ -742,6 +751,9 @@ impl Rota {
             if token_of(&toks, &to).is_none() {
                 let names: Vec<String> = labels.iter().map(|l| st.shown(l)).collect();
                 bail!("no account '{}' to start runs on here: {}", st.shown(&to), names.join(", "));
+            }
+            if st.seen.get(&to).is_some_and(|s| s.refused() && s.no_login) {
+                bail!("{} has no Claude login on {}: sign Claude Code in here first", st.shown(&to), self.machine());
             }
             if st.seen.get(&to).is_some_and(Seen::refused) {
                 bail!("{}'s token was refused: sign it in again first", st.shown(&to));

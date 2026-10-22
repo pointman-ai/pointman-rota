@@ -163,6 +163,13 @@ fn describe() {
         "{line}"
     );
     assert_eq!(accounts::describe("spare", None, Some("work"), None), "not checked yet");
+    // the machine's own login when Claude Code here isn't signed in (EXT-44): nothing to sign in again
+    let none = Seen { no_login: true, ..refused(Seen::default()) };
+    assert_eq!(
+        accounts::describe("default", Some(&none), None, None),
+        "no Claude login of its own on this machine: runs use the added accounts"
+    );
+    assert!(none.refused() && !none.needs_sign_in() && refused(Seen::default()).needs_sign_in());
 }
 
 #[test]

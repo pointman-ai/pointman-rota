@@ -162,6 +162,10 @@ pub struct Seen {
     /// A Codex account's plan, credits and free resets, as Codex's app server gave them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codex: Option<CodexPlan>,
+    /// The machine's own login when Claude Code here isn't signed in (`claude auth status`; EXT-44): it takes
+    /// no runs, as a refused token doesn't, but there's nothing to sign in again.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_login: bool,
 }
 
 /// What Codex says of an account beside its windows (`account/rateLimits/read`; James, Pointman thread 3359
@@ -295,6 +299,11 @@ fn credits_line(c: &Credits, spent: bool) -> String {
 impl Seen {
     pub fn refused(&self) -> bool {
         self.needs_auth == Some(true)
+    }
+
+    /// Refused, and signing it in again would fix it: not the machine's own login when there's none.
+    pub fn needs_sign_in(&self) -> bool {
+        self.refused() && !self.no_login
     }
 
     fn windows(&self) -> impl Iterator<Item = &Window> {
@@ -456,7 +465,9 @@ pub fn describe(label: &str, seen: Option<&Seen>, current: Option<&str>, now: Op
         }
         bits.extend(codex_bits(c));
     }
-    if seen.is_some_and(Seen::refused) {
+    if seen.is_some_and(|s| s.refused() && s.no_login) {
+        bits = vec!["no Claude login of its own on this machine: runs use the added accounts".into()];
+    } else if seen.is_some_and(Seen::refused) {
         bits.push("its token was refused".into());
     }
     if current == Some(label) {

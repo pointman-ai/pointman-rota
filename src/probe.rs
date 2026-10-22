@@ -95,6 +95,19 @@ pub fn run(cmd: &mut Command, input: Option<&str>, timeout: Duration) -> std::io
     Ok(Some(Ran { status, stdout: out.join().unwrap_or_default(), stderr: err.join().unwrap_or_default() }))
 }
 
+/// Whether Claude Code here is signed in of its own (`claude auth status`), with none of the tokens a run's
+/// environment could carry; None when it can't say.
+pub fn signed_in(claude: Option<&Path>, timeout: Duration) -> Option<bool> {
+    let claude = claude.map(Path::to_path_buf).or_else(find_claude)?;
+    let mut cmd = Command::new(&claude);
+    cmd.args(["auth", "status", "--json"]);
+    for name in UNSET {
+        cmd.env_remove(name);
+    }
+    let r = run(&mut cmd, None, timeout).ok()??;
+    serde_json::from_str::<Value>(r.stdout.trim()).ok()?.get("loggedIn")?.as_bool()
+}
+
 fn first(text: &str, n: usize) -> String {
     text.chars().take(n).collect()
 }

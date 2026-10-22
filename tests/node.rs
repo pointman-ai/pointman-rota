@@ -34,6 +34,14 @@ if [ "$1" = "setup-token" ]; then
   else printf '\nOAuth error: Invalid code\n'; fi
   exit 0
 fi
+# `claude auth status`: the machine's own login, none while the file FAKE_NO_LOGIN names is there
+if [ "$1" = "auth" ]; then
+  if [ -e "$FAKE_NO_LOGIN" ]; then echo '{"loggedIn": false, "authMethod": "none"}'; exit 1; fi
+  echo '{"loggedIn": true, "authMethod": "claude.ai"}'; exit 0
+fi
+if [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ] && [ -e "$FAKE_NO_LOGIN" ]; then
+  echo '{"type":"result","is_error":true,"result":"Not logged in · Please run /login"}'; exit 1
+fi
 # its usage (`get_usage`), as on 8 Oct: the machine's own login with credits off, work's 40% of its monthly
 # limit, and none for spare (a setup token's, maybe)
 input=$(cat)
@@ -93,6 +101,7 @@ impl Host {
             .env("PATH", format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()))
             .env("ROTA_STORE", &store)
             .env("FAKE_CALLS", at("calls"))
+            .env("FAKE_NO_LOGIN", at("no-login"))
             .env("CODEX_HOME", at("codex-own"))
             .env("ROTA_CODEX_HOMES", at("codex-homes"))
             .node("studio")
@@ -240,6 +249,40 @@ fn rota_on_a_node() {
     let fixed = host.call("health.fix", json!({"part": "old", "action": "auth"}));
     let message = fixed["message"].as_str().unwrap();
     assert!(message.contains("claude setup-token") && message.contains("rota add old"), "{message}");
+}
+
+/// A machine whose Claude Code isn't signed in of its own, a Mac signed in through rota only (EXT-44): its own
+/// login isn't failing and asks for nothing, runs go on the added accounts, and once Claude Code is signed in
+/// it's an account like the others again.
+#[test]
+fn a_machine_with_no_claude_login_of_its_own() {
+    let host = Host::with_state(|state| fs::write(state.parent().unwrap().join("no-login"), "").unwrap());
+    let added_checked = |got: &BTreeMap<String, Value>| {
+        why(got, "default").starts_with("no Claude login")
+            && got
+                .iter()
+                .filter(|(id, _)| *id != "default" && !id.starts_with("codex."))
+                .all(|(_, p)| p["state"] != "unknown")
+    };
+    let got = host.parts(added_checked);
+    assert_eq!(
+        why(&got, "default"),
+        "no Claude login of its own on this machine: runs use the added accounts",
+        "{got:?}"
+    );
+    assert_eq!((&got["default"]["state"], &got["default"]["needs"]), (&json!("unknown"), &json!([])));
+    // an added account whose token is refused still asks to be signed in again
+    assert_eq!((&got["old"]["state"], &got["old"]["needs"]), (&json!("failing"), &json!(["auth"])));
+    assert_eq!(host.account(json!({"run": 1, "client": "claude"})), "work");
+    let refused = host.refuses("rota.swap", json!({"to": "default"}));
+    assert!(refused.contains("no Claude login on studio"), "{refused}");
+    // signed in here: a run on it reports its windows, and it's an account like the others
+    fs::remove_file(host.path("no-login")).unwrap();
+    host.ended("default", "done", Value::Null, five_hour(0.3));
+    let got = host.parts(|got| why(got, "default").starts_with("5h 30%"));
+    assert!(why(&got, "default").starts_with("5h 30%"), "{got:?}");
+    assert_eq!((&got["default"]["state"], &got["default"]["needs"]), (&json!("ok"), &json!([])));
+    assert_eq!(host.run("rota.swap", json!({"to": "default"}))["current"], "default");
 }
 
 #[test]
