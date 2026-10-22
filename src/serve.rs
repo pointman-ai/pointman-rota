@@ -389,12 +389,25 @@ impl Rota {
                                      "used": accounts::used(seen, Some(now))});
                 if let Some(Value::Object(known)) = seen.map(|s| serde_json::to_value(s).unwrap_or_default()) {
                     for (k, v) in known {
-                        if ["five_hour", "seven_day", "status", "needs_auth", "checked_at", "extra", "credits"]
-                            .contains(&k.as_str())
+                        if [
+                            "five_hour",
+                            "seven_day",
+                            "status",
+                            "needs_auth",
+                            "checked_at",
+                            "extra",
+                            "credits",
+                            "no_login",
+                        ]
+                        .contains(&k.as_str())
                         {
                             row[k] = v;
                         }
                     }
+                }
+                // no login of its own here isn't a refused token: nothing reading the event asks for a sign-in
+                if seen.is_some_and(|s| s.no_login) {
+                    row["needs_auth"] = json!(false);
                 }
                 row["line"] = json!(accounts::describe(label, seen, current, Some(now)));
                 row

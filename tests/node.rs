@@ -274,6 +274,9 @@ fn a_machine_with_no_claude_login_of_its_own() {
     // an added account whose token is refused still asks to be signed in again
     assert_eq!((&got["old"]["state"], &got["old"]["needs"]), (&json!("failing"), &json!(["auth"])));
     assert_eq!(host.account(json!({"run": 1, "client": "claude"})), "work");
+    // nor does rota's event (the node's Needs-you records read it) say its token was refused
+    let row = &rows(&host.status())["default"];
+    assert_eq!((&row["needs_auth"], &row["no_login"]), (&json!(false), &json!(true)), "{row}");
     let refused = host.refuses("rota.swap", json!({"to": "default"}));
     assert!(refused.contains("no Claude login on studio"), "{refused}");
     // signed in here: a run on it reports its windows, and it's an account like the others
@@ -282,6 +285,7 @@ fn a_machine_with_no_claude_login_of_its_own() {
     let got = host.parts(|got| why(got, "default").starts_with("5h 30%"));
     assert!(why(&got, "default").starts_with("5h 30%"), "{got:?}");
     assert_eq!((&got["default"]["state"], &got["default"]["needs"]), (&json!("ok"), &json!([])));
+    assert!(rows(&host.status())["default"].get("no_login").is_none());
     assert_eq!(host.run("rota.swap", json!({"to": "default"}))["current"], "default");
 }
 
