@@ -145,7 +145,8 @@ impl Host {
     fn ended(&self, account: &str, status: &str, error: Value, limits: Value) {
         self.call(
             "session.ended",
-            json!({"run": 0, "account": account, "status": status, "error": error, "limits": limits}),
+            json!({"run": {"value": "run_1"}, "account": account, "status": format!("STATUS_{}", status.to_uppercase()),
+                   "error": error, "limits": limits}),
         );
     }
 
@@ -153,11 +154,11 @@ impl Host {
     fn parts(&self, until: impl Fn(&BTreeMap<String, Value>) -> bool) -> BTreeMap<String, Value> {
         let end = Instant::now() + Duration::from_secs(30);
         loop {
-            let got: BTreeMap<String, Value> = self
-                .call("health.check", json!({}))
+            let got: BTreeMap<String, Value> = self.call("health.check", json!({}))["parts"]
                 .as_array()
-                .unwrap()
-                .iter()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
                 .map(|p| (p["id"].as_str().unwrap().to_string(), p.clone()))
                 .collect();
             if until(&got) || Instant::now() > end {
@@ -178,7 +179,7 @@ fn why(parts: &BTreeMap<String, Value>, id: &str) -> String {
 
 /// Every Claude account checked once (a Codex account stays unknown until a run on it).
 fn claude_checked(got: &BTreeMap<String, Value>) -> bool {
-    got.iter().filter(|(id, _)| !id.starts_with("codex.")).all(|(_, p)| p["state"] != "unknown")
+    got.iter().filter(|(id, _)| !id.starts_with("codex.")).all(|(_, p)| p.get("state").is_some())
 }
 
 fn rows(status: &Value) -> BTreeMap<String, Value> {
@@ -205,28 +206,35 @@ fn rota_on_a_node() {
     // it checks each account once at start, through Claude Code, on each one's own token
     let got = host.parts(claude_checked);
     assert!(why(&got, "default").starts_with("5h 95%"), "{got:?}");
-    assert!(why(&got, "work").starts_with("5h 20%") && got["work"]["state"] == "ok");
-    assert_eq!(got["old"]["needs"], json!(["auth"]));
-    assert_eq!(got["old"]["state"], "failing");
+    assert!(why(&got, "work").starts_with("5h 20%") && got["work"]["state"] == "STATE_OK");
+    assert_eq!(got["old"]["needs"], json!(["ACTION_AUTH"]));
+    assert_eq!(got["old"]["state"], "STATE_FAILING");
     // an account kept in the vault, as rota.spare, is one too; a name that isn't a label isn't
     assert!(why(&got, "spare").starts_with("5h 20%") && !format!("{got:?}").contains("Not A Label"));
     // the same check asked Claude Code for each one's usage credits: % of the monthly spend limit, in dollars
     let first = rows(&host.status());
     assert_eq!(
         (&first["work"]["credits"]["used"], &first["work"]["credits"]["limit"], &first["work"]["credits"]["percent"]),
-        (&json!(80.5), &json!(200.0), &json!(40.0))
+        (&json!(80.5), &json!(200), &json!(40)) // (whole numbers come back as integers)
     );
     assert!(first["work"]["line"].as_str().unwrap().ends_with(" · monthly spend 40% ($80.50 of $200)"), "{first:?}");
     assert!(first["default"]["line"].as_str().unwrap().contains(" · usage credits off"));
     assert!(first["spare"].get("credits").is_none());
     // the machine's own login is past 90%, so runs start on work, with its token
-    let run = host.call("session.prepare", json!({"run": 1, "handle": "scene", "client": "claude"}));
+    let run = host
+        .call("session.prepare", json!({"run": {"value": "run_1"}, "handle": {"handle": "scene"}, "client": "claude"}));
     assert_eq!(run, json!({"env": {"CLAUDE_CODE_OAUTH_TOKEN": work()}, "account": "work"}));
-    assert_eq!(host.call("session.prepare", json!({"run": 2, "handle": "scene", "client": "gemini"})), json!({}));
+    assert_eq!(
+        host.call(
+            "session.prepare",
+            json!({"run": {"value": "run_2"}, "handle": {"handle": "scene"}, "client": "gemini"})
+        ),
+        json!({})
+    );
     // a run's own report moves it on: work fills up, so runs go to the vault's spare, with its token
     host.ended("work", "done", Value::Null, five_hour(0.97));
     assert_eq!(
-        host.call("session.prepare", json!({"run": 3, "client": "claude"})),
+        host.call("session.prepare", json!({"run": {"value": "run_3"}, "client": "claude"})),
         json!({"env": {"CLAUDE_CODE_OAUTH_TOKEN": spare()}, "account": "spare"})
     );
     // and spare full too: nothing else has room, so they stay put
@@ -234,7 +242,7 @@ fn rota_on_a_node() {
     spent["overageStatus"] = json!("rejected");
     spent["overageDisabledReason"] = json!("org_level_disabled_until");
     host.ended("spare", "done", Value::Null, spent);
-    assert_eq!(host.account(json!({"run": 4, "client": "claude"})), "spare");
+    assert_eq!(host.account(json!({"run": {"value": "run_4"}, "client": "claude"})), "spare");
     // its spend limit stays known through a run whose last event doesn't say
     host.ended("spare", "done", Value::Null, five_hour(0.95));
     let status = host.status();
@@ -246,7 +254,7 @@ fn rota_on_a_node() {
         status["accounts"].as_array().unwrap().iter().map(|a| a["label"].as_str().unwrap()).collect();
     assert_eq!(order, ["default", "work", "old", "spare"]);
     assert!(!status.to_string().contains(&spare()));
-    let fixed = host.call("health.fix", json!({"part": "old", "action": "auth"}));
+    let fixed = host.call("health.fix", json!({"part": "old", "action": "ACTION_AUTH"}));
     let message = fixed["message"].as_str().unwrap();
     assert!(message.contains("claude setup-token") && message.contains("rota add old"), "{message}");
 }
@@ -262,7 +270,7 @@ fn a_machine_with_no_claude_login_of_its_own() {
             && got
                 .iter()
                 .filter(|(id, _)| *id != "default" && !id.starts_with("codex."))
-                .all(|(_, p)| p["state"] != "unknown")
+                .all(|(_, p)| p.get("state").is_some())
     };
     let got = host.parts(added_checked);
     assert_eq!(
@@ -270,10 +278,14 @@ fn a_machine_with_no_claude_login_of_its_own() {
         "no Claude login of its own on this machine: runs use the added accounts",
         "{got:?}"
     );
-    assert_eq!((&got["default"]["state"], &got["default"]["needs"]), (&json!("unknown"), &json!([])));
+    assert_eq!(
+        (&got["default"]["state"], &got["default"]["needs"]),
+        (&Value::Null, &Value::Null),
+        "unknown, and needs nothing"
+    );
     // an added account whose token is refused still asks to be signed in again
-    assert_eq!((&got["old"]["state"], &got["old"]["needs"]), (&json!("failing"), &json!(["auth"])));
-    assert_eq!(host.account(json!({"run": 1, "client": "claude"})), "work");
+    assert_eq!((&got["old"]["state"], &got["old"]["needs"]), (&json!("STATE_FAILING"), &json!(["ACTION_AUTH"])));
+    assert_eq!(host.account(json!({"run": {"value": "run_1"}, "client": "claude"})), "work");
     // nor does rota's event (the node's Needs-you records read it) say its token was refused
     let row = &rows(&host.status())["default"];
     assert_eq!((&row["needs_auth"], &row["no_login"]), (&json!(false), &json!(true)), "{row}");
@@ -284,7 +296,7 @@ fn a_machine_with_no_claude_login_of_its_own() {
     host.ended("default", "done", Value::Null, five_hour(0.3));
     let got = host.parts(|got| why(got, "default").starts_with("5h 30%"));
     assert!(why(&got, "default").starts_with("5h 30%"), "{got:?}");
-    assert_eq!((&got["default"]["state"], &got["default"]["needs"]), (&json!("ok"), &json!([])));
+    assert_eq!((&got["default"]["state"], &got["default"]["needs"]), (&json!("STATE_OK"), &Value::Null));
     assert!(rows(&host.status())["default"].get("no_login").is_none());
     assert_eq!(host.run("rota.swap", json!({"to": "default"}))["current"], "default");
 }
@@ -293,12 +305,12 @@ fn a_machine_with_no_claude_login_of_its_own() {
 fn swapping_renaming_and_folders() {
     let host = Host::start();
     host.parts(claude_checked);
-    assert_eq!(host.account(json!({"run": 1, "client": "claude"})), "work");
+    assert_eq!(host.account(json!({"run": {"value": "run_1"}, "client": "claude"})), "work");
     // asked to, runs move at once, and stay there as after any move
     let got = host.run("rota.swap", json!({"to": "spare"}));
     assert_eq!(got["current"], "spare");
     assert_eq!(got["message"], "New runs on studio start on spare (was work)");
-    assert_eq!(host.account(json!({"run": 2, "client": "claude"})), "spare");
+    assert_eq!(host.account(json!({"run": {"value": "run_2"}, "client": "claude"})), "spare");
     assert!(host.refuses("rota.swap", json!({"to": "old"})).contains("token was refused"));
     assert!(host.refuses("rota.swap", json!({"to": "gone"})).contains("no account 'gone'"));
     // none named: the one with the most room (work and spare are both at 20%, default at 95%)
@@ -317,7 +329,7 @@ fn swapping_renaming_and_folders() {
     );
     host.run("rota.rename", json!({"from": "spare", "to": "team"}));
     assert_eq!(host.run("rota.swap", json!({"to": "team"}))["current"], "team");
-    assert_eq!(host.account(json!({"run": 3, "client": "claude"})), "spare");
+    assert_eq!(host.account(json!({"run": {"value": "run_3"}, "client": "claude"})), "spare");
     assert_eq!(host.parts(|_| true)["spare"]["name"], "Claude: team");
     assert_eq!(host.run("rota.swap", json!({"to": "spare"}))["current"], "team"); // its label still works
     assert!(host
@@ -346,13 +358,13 @@ fn swapping_renaming_and_folders() {
     host.run("rota.folder", json!({"folder": agent, "account": "spare"}));
     host.run("rota.swap", json!({"to": "work"}));
     assert_eq!(
-        host.call("session.prepare", json!({"run": 4, "client": "claude", "folder": agent})),
+        host.call("session.prepare", json!({"run": {"value": "run_4"}, "client": "claude", "folder": agent})),
         json!({"env": {"CLAUDE_CODE_OAUTH_TOKEN": spare()}, "account": "spare"})
     );
-    assert_eq!(host.account(json!({"run": 5, "client": "claude", "folder": "/elsewhere"})), "work");
+    assert_eq!(host.account(json!({"run": {"value": "run_5"}, "client": "claude", "folder": "/elsewhere"})), "work");
     // ...until it's full: then the rule again
     host.ended("spare", "done", Value::Null, over());
-    assert_eq!(host.account(json!({"run": 6, "client": "claude", "folder": agent})), "work");
+    assert_eq!(host.account(json!({"run": {"value": "run_6"}, "client": "claude", "folder": agent})), "work");
     assert_eq!(host.run("rota.folder", json!({"folder": agent}))["folders"], json!({}));
 }
 
@@ -362,27 +374,31 @@ fn the_accounts_pane_moves_runs_and_keeps_up() {
     host.parts(claude_checked);
     host.run("rota.swap", json!({"to": "work"}));
     let view = host.node.open_pane("accounts", Value::Null).unwrap();
+    // each block as the app gets it: protobuf's standard JSON
+    let block = |name: &str| serde_json::to_value(view.block(name).unwrap()).unwrap();
+    let subtitle = |name: &str| block(name)["text"]["heading"]["subtitle"].clone();
     assert_eq!(view.title().as_deref(), Some("Rota")); // Claude's accounts, then Codex's (James, thread 8028 [8035])
-    assert_eq!(view.block("head").unwrap()["subtitle"], "New runs start on work · it swaps at 90%");
-    let work = view.block("account:work").unwrap();
-    assert_eq!(work["children"][0]["subtitle"], "monthly spend 40% ($80.50 of $200) · runs start here");
+    assert_eq!(subtitle("head"), "New runs start on work · it swaps at 90%");
+    let work = block("account:work");
+    let children = &work["layout"]["stack"]["children"];
+    assert_eq!(children[0]["text"]["heading"]["subtitle"], "monthly spend 40% ($80.50 of $200) · runs start here");
     assert_eq!(
-        (work["children"][1]["label"].as_str(), work["children"][1]["value"].as_f64()),
+        (children[1]["chart"]["title"].as_str(), children[1]["chart"]["data"]["rows"][0][0].as_f64()),
         (Some("5-hour"), Some(20.0))
     );
-    let buttons = view.block("actions").unwrap()["buttons"].clone();
+    let buttons = block("actions")["input"]["actions"]["buttons"].clone();
     assert!(buttons.as_array().unwrap().iter().any(|b| b["id"] == "use:spare"), "{buttons}");
 
-    // a button moves new runs, and the pane follows in place: patches, never all of it again
-    view.input(json!({"kind": "tap", "block": "actions", "value": "use:spare"})).unwrap();
-    assert_eq!(view.block("head").unwrap()["subtitle"], "New runs start on spare · it swaps at 90%");
-    assert_eq!(host.account(json!({"run": 1, "client": "claude"})), "spare");
-    assert!(view.frames().iter().all(|(method, _)| method == "pane.patch"), "{:?}", view.frames());
-    view.input(json!({"kind": "tap", "block": "actions", "value": "swap"})).unwrap();
+    // a button moves new runs, and the pane follows in place: edits, never all of it again
+    view.input_json(json!({"kind": "tap", "block": "actions", "value": "use:spare"})).unwrap();
+    assert_eq!(subtitle("head"), "New runs start on spare · it swaps at 90%");
+    assert_eq!(host.account(json!({"run": {"value": "run_1"}, "client": "claude"})), "spare");
+    assert!(view.frames().iter().all(|(method, _)| method == "pane.edit"), "{:?}", view.frames());
+    view.input_json(json!({"kind": "tap", "block": "actions", "value": "swap"})).unwrap();
 
-    let refused = view.input(json!({"kind": "tap", "block": "actions", "value": "use:old"})).unwrap_err();
+    let refused = view.input_json(json!({"kind": "tap", "block": "actions", "value": "use:old"})).unwrap_err();
     assert!(refused.message.contains("token was refused"), "{refused}");
-    let refused = view.input(json!({"kind": "tap", "block": "head", "value": null})).unwrap_err();
+    let refused = view.input_json(json!({"kind": "tap", "block": "head", "value": null})).unwrap_err();
     assert_eq!(refused.message, "only the buttons do something here");
     assert!(view.problems().is_empty(), "{:?}", view.problems());
 }
@@ -451,13 +467,13 @@ fn codex_accounts() {
     fs::write(own.join("auth.json"), "{}").unwrap();
     // the machine's own login only, so far: runs start on it, with nothing set
     assert_eq!(
-        host.call("session.prepare", json!({"run": 1, "client": "codex"})),
-        json!({"env": {}, "account": "default"})
+        host.call("session.prepare", json!({"run": {"value": "run_1"}, "client": "codex"})),
+        json!({"account": "default"})
     );
     rollout(&own, 95.0, 10080);
     host.call(
         "session.ended",
-        json!({"run": 1, "client": "codex", "account": "default", "status": "done", "error": null,
+        json!({"run": {"value": "run_1"}, "client": "codex", "account": "default", "status": "STATUS_DONE", "error": null,
                                       "limits": null}),
     );
     // another account, signed in in a home of its own (as `rota codex add` leaves it)
@@ -470,18 +486,18 @@ fn codex_accounts() {
     rollout(&spare, 10.0, 10080);
     host.call(
         "session.ended",
-        json!({"run": 2, "client": "codex", "account": "spare", "status": "done", "error": null,
+        json!({"run": {"value": "run_2"}, "client": "codex", "account": "spare", "status": "STATUS_DONE", "error": null,
                                       "limits": null}),
     );
     assert_eq!(
-        host.call("session.prepare", json!({"run": 3, "client": "codex"})),
+        host.call("session.prepare", json!({"run": {"value": "run_3"}, "client": "codex"})),
         json!({"env": {"CODEX_HOME": spare}, "account": "spare"})
     );
     let got = host.parts(|g| g.contains_key("codex.spare"));
     assert!(why(&got, "codex.default").starts_with("week 95%"), "{got:?}");
     assert!(why(&got, "codex.spare").ends_with("runs start here"));
     // Claude's accounts are their own: a Codex move doesn't move Claude runs
-    assert_ne!(host.account(json!({"run": 4, "client": "claude"})), "spare");
+    assert_ne!(host.account(json!({"run": {"value": "run_4"}, "client": "claude"})), "spare");
     assert_eq!(host.status()["codex"]["current"], "spare");
 }
 
@@ -491,9 +507,15 @@ fn codex_accounts() {
 fn moves_cooldown_and_agents() {
     let host = Host::start();
     host.parts(claude_checked);
-    assert_eq!(host.account(json!({"run": 1, "handle": "scene", "client": "claude"})), "work");
+    assert_eq!(
+        host.account(json!({"run": {"value": "run_1"}, "handle": {"handle": "scene"}, "client": "claude"})),
+        "work"
+    );
     host.ended("work", "done", Value::Null, five_hour(0.97));
-    assert_eq!(host.account(json!({"run": 2, "handle": "scene", "client": "claude"})), "spare");
+    assert_eq!(
+        host.account(json!({"run": {"value": "run_2"}, "handle": {"handle": "scene"}, "client": "claude"})),
+        "spare"
+    );
     let status = host.status();
     let last = status["moves"].as_array().unwrap().last().unwrap().clone();
     assert_eq!((last["from"].clone(), last["to"].clone()), (json!("work"), json!("spare")));
@@ -505,18 +527,27 @@ fn moves_cooldown_and_agents() {
     // spare fills too, and work looks empty again (its window reset): work sits out its cooldown
     host.ended("spare", "done", Value::Null, five_hour(0.95));
     host.ended("work", "done", Value::Null, five_hour(0.10));
-    assert_eq!(host.account(json!({"run": 4, "handle": "rig", "client": "claude"})), "spare");
+    assert_eq!(
+        host.account(json!({"run": {"value": "run_4"}, "handle": {"handle": "rig"}, "client": "claude"})),
+        "spare"
+    );
 
     // spare runs out altogether: runs leave it at once, cooldown or not, for one that can take them
     // (default, at 95%: work is still cooling down)
     host.ended("spare", "limited", json!("usage limit reached"), over());
-    assert_eq!(host.account(json!({"run": 6, "handle": "rig", "client": "claude"})), "default");
+    assert_eq!(
+        host.account(json!({"run": {"value": "run_6"}, "handle": {"handle": "rig"}, "client": "claude"})),
+        "default"
+    );
     host.run("rota.swap", json!({"to": "spare"})); // (back, for what follows)
 
     // an agent mapped to an account starts there while it can take runs
     host.run("rota.agent", json!({"agent": "@scene", "account": "work"}));
     assert_eq!(
-        host.call("session.prepare", json!({"run": 7, "handle": "scene", "client": "claude"})),
+        host.call(
+            "session.prepare",
+            json!({"run": {"value": "run_7"}, "handle": {"handle": "scene"}, "client": "claude"})
+        ),
         json!({"env": {"CLAUDE_CODE_OAUTH_TOKEN": work()}, "account": "work"})
     );
 
@@ -525,14 +556,29 @@ fn moves_cooldown_and_agents() {
     // there, and with the own login full the run goes where any run would
     let drive = json!(["claude.ai Google Drive"]);
     assert_eq!(
-        host.call("session.prepare", json!({"run": 8, "handle": "search", "client": "claude", "connectors": drive})),
-        json!({"env": {}, "account": "default"})
+        host.call(
+            "session.prepare",
+            json!({"run": {"value": "run_8"}, "handle": {"handle": "search"}, "client": "claude", "connectors": drive})
+        ),
+        json!({"account": "default"})
     );
-    assert_eq!(host.account(json!({"run": 9, "handle": "scene", "client": "claude", "connectors": drive})), "work");
+    assert_eq!(
+        host.account(
+            json!({"run": {"value": "run_9"}, "handle": {"handle": "scene"}, "client": "claude", "connectors": drive})
+        ),
+        "work"
+    );
     host.ended("default", "limited", json!("usage limit reached"), over());
-    let anywhere = host.account(json!({"run": 10, "handle": "search", "client": "claude", "connectors": []}));
+    let anywhere = host.account(
+        json!({"run": {"value": "run_10"}, "handle": {"handle": "search"}, "client": "claude", "connectors": []}),
+    );
     assert_ne!(anywhere, "default");
-    assert_eq!(host.account(json!({"run": 11, "handle": "search", "client": "claude", "connectors": drive})), anywhere);
+    assert_eq!(
+        host.account(
+            json!({"run": {"value": "run_11"}, "handle": {"handle": "search"}, "client": "claude", "connectors": drive})
+        ),
+        anywhere
+    );
     assert_eq!(host.run("rota.agent", json!({"agent": "scene"}))["agents"], json!({}));
 }
 
@@ -547,26 +593,34 @@ fn signing_an_account_in_from_the_apps() {
         .node
         .call_timeout(
             "credentials.sign_in",
-            json!({"form": "account", "label": "work", "person": "james", "session": "sgn_1"}),
+            json!({"form": "account", "label": "work", "person": {"handle": "james"}, "session": {"value": "sgn_1"}}),
             long,
         )
         .unwrap();
     let url = got["url"].as_str().unwrap();
     assert!(url.starts_with("https://claude.com/cai/oauth/authorize") && url.contains("platform.claude.com"), "{url}");
     assert!(!url.contains("localhost") && got["prompt"].as_str().unwrap().contains("paste the code"));
-    let e = host.fails("credentials.code", json!({"form": "account", "session": "sgn_1", "code": "wrong-code-0000"}));
+    let e = host.fails(
+        "credentials.code",
+        json!({"form": "account", "session": {"value": "sgn_1"}, "code": "wrong-code-0000"}),
+    );
     assert!(e.contains("didn't take that code"), "{e}");
     // one try per sign-in
-    let e = host.fails("credentials.code", json!({"form": "account", "session": "sgn_1", "code": "good-code-1234"}));
+    let e = host
+        .fails("credentials.code", json!({"form": "account", "session": {"value": "sgn_1"}, "code": "good-code-1234"}));
     assert!(e.contains("has ended"), "{e}");
     host.node
-        .call_timeout("credentials.sign_in", json!({"form": "account", "label": "work", "session": "sgn_2"}), long)
+        .call_timeout(
+            "credentials.sign_in",
+            json!({"form": "account", "label": "work", "session": {"value": "sgn_2"}}),
+            long,
+        )
         .unwrap();
     let got = host
         .node
         .call_timeout(
             "credentials.code",
-            json!({"form": "account", "session": "sgn_2", "code": "good-code-1234"}),
+            json!({"form": "account", "session": {"value": "sgn_2"}, "code": "good-code-1234"}),
             long,
         )
         .unwrap();
@@ -574,9 +628,13 @@ fn signing_an_account_in_from_the_apps() {
         serde_json::from_str::<Value>(got["value"].as_str().unwrap()).unwrap(),
         json!({"kind": "env", "vars": {"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-signedinsignedinsignedinsignedin1234"}})
     );
-    let e = host.fails("credentials.sign_in", json!({"form": "account", "label": "Not A Label", "session": "sgn_3"}));
+    let e = host.fails(
+        "credentials.sign_in",
+        json!({"form": "account", "label": "Not A Label", "session": {"value": "sgn_3"}}),
+    );
     assert!(e.contains("label"), "{e}");
-    let e = host.fails("credentials.code", json!({"form": "account", "session": "sgn_3", "code": "x; rm -rf /"}));
+    let e = host
+        .fails("credentials.code", json!({"form": "account", "session": {"value": "sgn_3"}, "code": "x; rm -rf /"}));
     assert!(e.contains("sign-in code"), "{e}");
 }
 
@@ -603,7 +661,7 @@ fn the_state_of_a_python_rota_carries_over() {
     assert_eq!(status["agents"], json!({"scene": "work"}));
     assert_eq!(status["folders"], json!({"/elsewhere": "spare"}));
     assert_eq!(status["moves"], python["moves"]);
-    assert_eq!(rows(&status)["work"]["five_hour"], json!({"used": 46.0, "resets": 4102444800u64}));
+    assert_eq!(rows(&status)["work"]["five_hour"], json!({"used": 46, "resets": 4102444800u64}));
     // and what it writes back has the same shape, so the Python rota could read it again
     host.run("rota.agent", json!({"agent": "rig", "account": "work"}));
     let written: Value = serde_json::from_str(&fs::read_to_string(file(&host.path("state"))).unwrap()).unwrap();
