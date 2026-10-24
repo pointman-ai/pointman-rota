@@ -11,7 +11,14 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use anyhow::bail;
-use pointman_extension::{Extension, Handle, Job, Pane, Refused};
+use pointman_extension::protocol::{
+    CredentialsCodeRequest, CredentialsCodeResponse, CredentialsSignInRequest, CredentialsSignInResponse,
+    HealthCheckRequest, HealthCheckResponse, HealthFixRequest, HealthFixResponse, PaneOpenResponse,
+    SessionEndedRequest, SessionEndedResponse, SessionPrepareRequest, SessionPrepareResponse,
+};
+use pointman_extension::v1::health::{self, part};
+use pointman_extension::v1::{member_ref, MemberRef, PaneInput};
+use pointman_extension::{convert, Extension, Handle, Job, Pane, Refused};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -30,7 +37,7 @@ const LIST_EVERY: Duration = Duration::from_secs(60);
 const OPEN_EVERY: Duration = Duration::from_secs(1800);
 
 type Tokens = Vec<(String, Option<String>)>;
-/// A method or command: what it answers, from its params.
+/// A command: what it answers, from its params.
 type Answer = fn(&Rota, &Value) -> anyhow::Result<Value>;
 
 /// One swap: when, from which account to which, and why.
@@ -116,11 +123,7 @@ fn relist(age: Option<Duration>, asking: bool) -> Relist {
 
 /// The vault's rota.* names, as the node lists them.
 fn list(h: &Handle) -> Result<Vec<String>, String> {
-    let got = h.request("secret.list", json!({"prefix": "rota."})).map_err(|e| e.to_string())?;
-    Ok(got
-        .get("names")
-        .and_then(Value::as_array)
-        .map_or_else(Vec::new, |names| names.iter().filter_map(Value::as_str).map(String::from).collect()))
+    h.secrets("rota.").map_err(|e| e.to_string())
 }
 
 pub struct Rota {
@@ -138,20 +141,26 @@ fn token_of<'a>(toks: &'a Tokens, label: &str) -> Option<&'a Option<String>> {
 }
 
 /// A run's account, and its token in the run's environment (none for this machine's own login).
-fn run_on(label: &str, token: &Option<String>) -> Value {
-    let env = match token {
-        Some(t) => json!({"CLAUDE_CODE_OAUTH_TOKEN": t}),
-        None => json!({}),
-    };
-    json!({"env": env, "account": label})
+fn run_on(label: &str, token: &Option<String>) -> SessionPrepareResponse {
+    let mut run = SessionPrepareResponse { account: Some(label.to_string()), ..Default::default() };
+    if let Some(t) = token {
+        run.env.insert("CLAUDE_CODE_OAUTH_TOKEN".into(), t.clone());
+    }
+    run
 }
 
 /// Whether a run was granted claude.ai connectors (the node passes their names as `connectors`): only this
 /// machine's own login loads them.
-fn has_connectors(p: &Value) -> bool {
-    p.get("connectors")
-        .and_then(Value::as_array)
-        .is_some_and(|a| a.iter().any(|v| v.as_str().is_some_and(|s| !s.is_empty())))
+fn has_connectors(p: &SessionPrepareRequest) -> bool {
+    p.connectors.iter().any(|c| !c.is_empty())
+}
+
+/// An agent's handle as rota.agent keeps it: no @, lowercase.
+fn handle_of(who: &MemberRef) -> String {
+    match &who.kind {
+        Some(member_ref::Kind::Handle(h)) => h.trim_start_matches('@').to_lowercase(),
+        _ => String::new(),
+    }
 }
 
 /// Whether an account can take a run at all: its token wasn't refused and it isn't full.
@@ -174,13 +183,16 @@ fn why_left(label: Option<&str>, seen: Option<&Seen>) -> String {
     }
 }
 
-fn folder_key(folder: Option<&Value>) -> Option<String> {
-    let folder = text(folder);
-    (!folder.is_empty()).then(|| util::resolve(&util::expand(&folder)).to_string_lossy().into_owned())
+fn folder_key(folder: &str) -> Option<String> {
+    (!folder.is_empty()).then(|| util::resolve(&util::expand(folder)).to_string_lossy().into_owned())
 }
 
 fn label_of(p: &Value, key: &str) -> anyhow::Result<String> {
-    let label = text(p.get(key)).trim().to_lowercase();
+    label_in(&text(p.get(key)), key)
+}
+
+fn label_in(given: &str, key: &str) -> anyhow::Result<String> {
+    let label = given.trim().to_lowercase();
     if !accounts::is_label(&label) {
         bail!("{key}: an account's label, like work");
     }
@@ -189,13 +201,27 @@ fn label_of(p: &Value, key: &str) -> anyhow::Result<String> {
 
 /// How a part is doing in `pointman health`, from how full it is and whether its token was refused. The
 /// machine's own login, when there's none, is unknown, as the node's own part for it says.
-fn part_state(seen: &Seen, full: Option<f64>) -> &'static str {
+fn part_state(seen: &Seen, full: Option<f64>) -> part::State {
     match full {
-        _ if seen.refused() && seen.no_login => "unknown",
-        _ if seen.refused() => "failing",
-        Some(f) if f >= 100.0 => "failing",
-        None => "unknown",
-        Some(_) => "ok",
+        _ if seen.refused() && seen.no_login => part::State::STATE_UNSPECIFIED,
+        _ if seen.refused() => part::State::STATE_FAILING,
+        Some(f) if f >= 100.0 => part::State::STATE_FAILING,
+        None => part::State::STATE_UNSPECIFIED,
+        Some(_) => part::State::STATE_OK,
+    }
+}
+
+/// An account as a part under rota in `pointman health`.
+fn health_part(id: String, name: String, seen: &Seen, full: Option<f64>, why: String) -> health::Part {
+    let needs = if seen.needs_sign_in() { vec![health::Action::ACTION_AUTH.into()] } else { vec![] };
+    health::Part {
+        id,
+        kind: "account".into(),
+        name: Some(name),
+        state: part_state(seen, full).into(),
+        needs,
+        why: Some(why),
+        ..Default::default()
     }
 }
 
@@ -236,7 +262,7 @@ impl Rota {
     }
 
     fn machine(&self) -> String {
-        text(self.h.node().get("machine"))
+        self.h.machine()
     }
 
     /// The accounts kept in the board's vault as `rota.<label>`, for this machine: their names listed and
@@ -325,7 +351,7 @@ impl Rota {
     }
 
     fn state_file(&self) -> PathBuf {
-        let dir = text(self.h.node().get("state_dir"));
+        let dir = self.h.node().state_dir;
         PathBuf::from(if dir.is_empty() { ".".into() } else { dir }).join("rota.json")
     }
 
@@ -459,14 +485,14 @@ impl Rota {
 
     /// A tap on the accounts pane's buttons: `swap` (the one with the most room), or `use:<label>`. A tap on
     /// `add` is the apps saying an account went into the vault from the pane: look at the vault again now.
-    fn tapped(&self, event: &Value) -> anyhow::Result<()> {
-        let button = event["value"].as_str().unwrap_or_default();
-        if event["kind"] == "tap" && event["block"] == "add" {
+    fn tapped(&self, event: &PaneInput) -> anyhow::Result<()> {
+        let (button, block) = (event.str("value").unwrap_or_default(), event.str("block"));
+        if event.kind == "tap" && block == Some("add") {
             self.vault.lock().unwrap_or_else(|e| e.into_inner()).listed = None;
             self.tell();
             return Ok(());
         }
-        if event["kind"] != "tap" || event["block"] != "actions" {
+        if event.kind != "tap" || block != Some("actions") {
             bail!(Refused::new("only the buttons do something here"));
         }
         let params = match button.strip_prefix("use:") {
@@ -566,11 +592,11 @@ impl Rota {
 
     /// The account a run starts on: its token goes in the run's environment, and none for this machine's
     /// own login.
-    fn prepare(&self, p: &Value) -> anyhow::Result<Value> {
-        match p.get("client").and_then(Value::as_str) {
-            Some("codex") => return Ok(self.prepare_codex()),
-            Some("claude") => {}
-            _ => return Ok(json!({})),
+    fn prepare(&self, p: &SessionPrepareRequest) -> anyhow::Result<SessionPrepareResponse> {
+        match p.client.as_str() {
+            "codex" => return Ok(self.prepare_codex()),
+            "claude" => {}
+            _ => return Ok(SessionPrepareResponse::default()),
         }
         let toks = self.all_tokens();
         let (label, moved) = {
@@ -580,9 +606,9 @@ impl Rota {
             // 1018 [4263]); the agent's folder's account
             let own = has_connectors(p).then(|| DEFAULT.to_string());
             let pins = [
-                st.agents.get(&text(p.get("handle"))).cloned(),
+                st.agents.get(&handle_of(&p.handle)).cloned(),
                 own,
-                folder_key(p.get("folder")).and_then(|k| st.folders.get(&k)).cloned(),
+                folder_key(&p.folder).and_then(|k| st.folders.get(&k)).cloned(),
             ];
             for pinned in pins.into_iter().flatten() {
                 if let Some(token) = token_of(&toks, &pinned).filter(|_| takes_runs(st.seen.get(&pinned), None)) {
@@ -619,7 +645,7 @@ impl Rota {
     }
 
     /// A Codex run's account: its own Codex home (CODEX_HOME), or nothing for the machine's own login.
-    fn prepare_codex(&self) -> Value {
+    fn prepare_codex(&self) -> SessionPrepareResponse {
         let mut labels = codex::labels(&accounts::load_store(None));
         if labels.is_empty() {
             labels.push(DEFAULT.into());
@@ -635,16 +661,19 @@ impl Rota {
             }
             label
         };
-        let env = if label == DEFAULT { json!({}) } else { json!({"CODEX_HOME": codex::home(&label)}) };
-        json!({"env": env, "account": label})
+        let mut run = SessionPrepareResponse { account: Some(label.clone()), ..Default::default() };
+        if label != DEFAULT {
+            run.env.insert("CODEX_HOME".into(), codex::home(&label).to_string_lossy().into_owned());
+        }
+        run
     }
 
     /// A run's account as Claude Code last reported it, and whether its token was refused. A Codex run's
     /// from the newest session Codex wrote in that account's home.
-    fn ended(&self, p: &Value) -> anyhow::Result<Value> {
-        let label = Some(text(p.get("account"))).filter(|l| !l.is_empty()).unwrap_or_else(|| DEFAULT.into());
-        let error = p.get("error").and_then(Value::as_str).map(String::from);
-        if p.get("client").and_then(Value::as_str) == Some("codex") {
+    fn ended(&self, p: &SessionEndedRequest) -> anyhow::Result<SessionEndedResponse> {
+        let label = p.account.clone().filter(|l| !l.is_empty()).unwrap_or_else(|| DEFAULT.into());
+        let error = p.error.clone();
+        if p.client == "codex" {
             let got = codex::latest(&label);
             {
                 let mut st = self.state();
@@ -660,21 +689,21 @@ impl Rota {
                 self.save_state(&st);
             }
             self.tell();
-            return Ok(json!({}));
+            return Ok(SessionEndedResponse::default());
         }
-        let limits = p.get("limits");
-        let refused = probe::refused(error.as_deref()) && !truthy(limits);
-        self.note(&label, limits, error, refused);
-        Ok(json!({}))
+        let limits = p.limits.as_option().map(convert::from_struct);
+        let refused = probe::refused(error.as_deref()) && !truthy(limits.as_ref());
+        self.note(&label, limits.as_ref(), error, refused);
+        Ok(SessionEndedResponse::default())
     }
 
     /// Each account as a part under rota in `pointman health` and the apps' Machines page.
-    fn health(&self) -> Value {
+    fn health(&self) -> HealthCheckResponse {
         let toks = self.all_tokens();
         let codex_labels = codex::labels(&accounts::load_store(None));
         let now = now();
         let st = self.state();
-        let mut out = vec![];
+        let mut parts = vec![];
         for (label, _) in &toks {
             let seen = st.seen.get(label).cloned().unwrap_or_default();
             let full = accounts::used(Some(&seen), Some(now));
@@ -684,48 +713,50 @@ impl Rota {
                     why += &format!(" since {} ({})", util::local_time(last.at, "%H:%M"), last.why);
                 }
             }
-            out.push(json!({"id": label, "kind": "account", "name": format!("Claude: {}", st.shown(label)),
-                            "state": part_state(&seen, full), "needs": if seen.needs_sign_in() { vec!["auth"] } else { vec![] },
-                            "why": why}));
+            parts.push(health_part(label.clone(), format!("Claude: {}", st.shown(label)), &seen, full, why));
         }
         for label in codex_labels {
             let seen = st.codex.seen.get(&label).cloned().unwrap_or_default();
             let full = accounts::used(Some(&seen), Some(now));
-            out.push(json!({"id": format!("codex.{label}"), "kind": "account", "name": format!("Codex: {label}"),
-                            "state": part_state(&seen, full), "needs": if seen.needs_sign_in() { vec!["auth"] } else { vec![] },
-                            "why": accounts::describe(&label, Some(&seen), st.codex.current.as_deref(), Some(now))}));
+            let why = accounts::describe(&label, Some(&seen), st.codex.current.as_deref(), Some(now));
+            parts.push(health_part(format!("codex.{label}"), format!("Codex: {label}"), &seen, full, why));
         }
-        Value::Array(out)
+        HealthCheckResponse { parts, ..Default::default() }
     }
 
-    fn fix(&self, p: &Value) -> anyhow::Result<Value> {
-        let label = text(p.get("part"));
-        let auth = p.get("action").and_then(Value::as_str) == Some("auth");
-        if let Some(cx) = label.strip_prefix("codex.").filter(|_| auth) {
-            return Ok(json!({"message": format!("On {}: run `{} codex add {cx}` and sign in again",
-                                                self.machine(), this_program())}));
-        }
-        if !auth || label == DEFAULT {
+    fn fix(&self, p: &HealthFixRequest) -> anyhow::Result<HealthFixResponse> {
+        let label = p.part.as_str();
+        let auth = p.action == health::Action::ACTION_AUTH;
+        let message = if let Some(cx) = label.strip_prefix("codex.").filter(|_| auth) {
+            format!("On {}: run `{} codex add {cx}` and sign in again", self.machine(), this_program())
+        } else if !auth || label == DEFAULT {
             bail!("rota can only say how to sign an added account in again");
-        }
-        Ok(json!({"message": format!("On {}: run `claude setup-token` signed in as {label}'s account, \
-                                      then `{} add {label}` and paste the token", self.machine(), this_program())}))
+        } else {
+            format!(
+                "On {}: run `claude setup-token` signed in as {label}'s account, then `{} add {label}` and paste the \
+                 token",
+                self.machine(),
+                this_program()
+            )
+        };
+        Ok(HealthFixResponse { message, ..Default::default() })
     }
 
     /// Sign an account in from the apps (MB-216): Claude Code's own setup-token, its link for the person.
-    fn sign_in(&self, p: &Value) -> anyhow::Result<Value> {
-        if p.get("form").and_then(Value::as_str) != Some("account") {
+    fn sign_in(&self, p: &CredentialsSignInRequest) -> anyhow::Result<CredentialsSignInResponse> {
+        if p.form != "account" {
             bail!("rota signs in Claude accounts only (form: account)");
         }
-        label_of(p, "label")?;
-        self.signins.start(&text(p.get("session")), Duration::from_secs(60))
+        label_in(&p.label, "label")?;
+        self.signins.start(&p.session.value, Duration::from_secs(60))
     }
 
     /// The code the sign-in page showed: the token comes back for the node to seal into the vault.
-    fn sign_in_code(&self, p: &Value) -> anyhow::Result<Value> {
-        let dir = text(self.h.node().get("state_dir"));
+    fn sign_in_code(&self, p: &CredentialsCodeRequest) -> anyhow::Result<CredentialsCodeResponse> {
+        let dir = self.h.node().state_dir;
         let keep = (!dir.is_empty()).then(|| PathBuf::from(dir));
-        self.signins.code(&text(p.get("session")), &text(p.get("code")), Duration::from_secs(120), keep.as_deref())
+        let value = self.signins.code(&p.session.value, &p.code, Duration::from_secs(120), keep.as_deref())?;
+        Ok(CredentialsCodeResponse { value, ..Default::default() })
     }
 
     /// `/rota add work` as a post (an agent's, or an app's from before a command could name its form): the
@@ -842,7 +873,7 @@ impl Rota {
 
     /// Runs in this folder start on this account while it has room (none named: back to the rule).
     fn folder(&self, params: &Value) -> anyhow::Result<Value> {
-        let Some(key) = folder_key(params.get("folder")) else {
+        let Some(key) = folder_key(&text(params.get("folder"))) else {
             bail!("folder: an agent's folder on this machine");
         };
         let named = if truthy(params.get("account")) { Some(label_of(params, "account")?) } else { None };
@@ -919,18 +950,18 @@ pub fn serve() -> anyhow::Result<()> {
     let r = rota.clone();
     ext.on_start(move |_: &Handle| r.started());
 
-    let methods: [(&str, Answer); 6] = [
-        ("session.prepare", Rota::prepare),
-        ("session.ended", Rota::ended),
-        ("health.check", |r, _| Ok(r.health())),
-        ("health.fix", Rota::fix),
-        ("credentials.sign_in", Rota::sign_in),
-        ("credentials.code", Rota::sign_in_code),
-    ];
-    for (name, f) in methods {
-        let r = rota.clone();
-        ext.method(name, move |p: Value| f(&r, &p));
-    }
+    let r = rota.clone();
+    ext.on(move |p: SessionPrepareRequest| r.prepare(&p));
+    let r = rota.clone();
+    ext.on(move |p: SessionEndedRequest| r.ended(&p));
+    let r = rota.clone();
+    ext.on(move |_: HealthCheckRequest| Ok(r.health()));
+    let r = rota.clone();
+    ext.on(move |p: HealthFixRequest| r.fix(&p));
+    let r = rota.clone();
+    ext.on(move |p: CredentialsSignInRequest| r.sign_in(&p));
+    let r = rota.clone();
+    ext.on(move |p: CredentialsCodeRequest| r.sign_in_code(&p));
     let commands: [(&str, Answer); 7] = [
         ("rota.status", |r, _| Ok(r.summary())),
         ("rota.usage", |r, _| Ok(r.usage())),
@@ -948,8 +979,8 @@ pub fn serve() -> anyhow::Result<()> {
     let r = rota.clone();
     ext.pane("accounts", move |p: &Pane| {
         let tapped = r.clone();
-        p.on_input(move |_: &Pane, event: &Value| tapped.tapped(event));
-        Ok(json!({"title": "Rota", "blocks": crate::view::pane(&r.summary(), now())}))
+        p.on_input(move |_: &Pane, event: &PaneInput| tapped.tapped(event));
+        Ok(PaneOpenResponse::blocks(crate::view::pane(&r.summary(), now())).titled("Rota"))
     });
     let r = rota.clone();
     ext.every(Duration::from_secs(60), move |_: &Handle| r.check_idle(), "checks");

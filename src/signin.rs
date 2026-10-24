@@ -21,8 +21,9 @@ use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail};
+use pointman_extension::protocol::CredentialsSignInResponse;
 use regex::Regex;
-use serde_json::{json, Value};
+use serde_json::json;
 use tempfile::TempDir;
 
 use crate::{accounts, probe};
@@ -323,7 +324,7 @@ impl SignIns {
     }
 
     /// Start setup-token; answer its sign-in link.
-    pub fn start(&self, session_id: &str, timeout: Duration) -> anyhow::Result<Value> {
+    pub fn start(&self, session_id: &str, timeout: Duration) -> anyhow::Result<CredentialsSignInResponse> {
         let Some(claude) = self.claude.clone().or_else(probe::find_claude) else {
             bail!("Claude Code isn't installed on this machine");
         };
@@ -370,13 +371,17 @@ impl SignIns {
         };
         let old = self.open.lock().unwrap().insert(session_id.to_string(), s);
         drop(old);
-        Ok(json!({"url": link, "prompt": "Sign in as the account to add, then paste the code the page shows."}))
+        Ok(CredentialsSignInResponse {
+            url: link,
+            prompt: Some("Sign in as the account to add, then paste the code the page shows.".into()),
+            ..Default::default()
+        })
     }
 
     /// Give setup-token the code; answer the token as the vault payload. The session ends either way. One
     /// that fails leaves what Claude Code wrote, codes and tokens taken out, in `keep` (rota's state
     /// folder) as signin-last.log, readable by this user only, so the next fix needn't be a guess.
-    pub fn code(&self, session_id: &str, code: &str, timeout: Duration, keep: Option<&Path>) -> anyhow::Result<Value> {
+    pub fn code(&self, session_id: &str, code: &str, timeout: Duration, keep: Option<&Path>) -> anyhow::Result<String> {
         let code = code.trim();
         if !CODE.is_match(code) {
             bail!("that isn't a sign-in code: paste the code the page showed");
@@ -407,7 +412,7 @@ impl SignIns {
             });
         };
         let value = json!({"kind": "env", "vars": {"CLAUDE_CODE_OAUTH_TOKEN": token}});
-        Ok(json!({"value": value.to_string()}))
+        Ok(value.to_string())
     }
 
     /// Drop sign-ins nobody finished.
@@ -518,7 +523,7 @@ mod tests {
 fn real_setup_token() {
     let s = SignIns::new(None);
     let got = s.start("t1", Duration::from_secs(60)).unwrap();
-    assert!(got["url"].as_str().unwrap().contains("platform.claude.com"));
+    assert!(got.url.contains("platform.claude.com"));
     let keep = tempfile::tempdir().unwrap();
     // as long as a real one (James's was 92 characters): sent with its Enter in one go, it never submitted
     let code = format!("{}#{}", "fakecode".repeat(6), "fakestate1".repeat(4));
