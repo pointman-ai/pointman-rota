@@ -86,7 +86,7 @@ They show in `pointman health` as `codex.<label>`.
 
 ## Commands
 
-Run on a machine like any extension's: `/rota swap work` in a thread, or `run_on_machine` for agents.
+Run on a machine like any extension's: `/rota swap work` in a thread, or `create_job` for agents.
 
 | Kind | Slash | What |
 |---|---|---|

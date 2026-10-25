@@ -3,6 +3,9 @@
 //! that move new runs. Core posts `text` for agents and older apps and `blocks` for the apps (blocks
 //! version 1: text, a chart/v1 spec, actions); the panel is the first chart.
 
+use pointman_extension::blocks::{actions, button, empty, heading, meter};
+use pointman_extension::v1::block::Family;
+use pointman_extension::v1::{input, layout, Block, Input, Layout, Tone};
 use serde_json::{json, Value};
 
 use crate::util::local_time;
@@ -72,7 +75,7 @@ pub fn view(summary: &Value, message: Option<&str>) -> (String, Value) {
 }
 
 /// One account in the pane: its name with what the meters don't say, then a meter for each window.
-fn account_block(a: &Value, threshold: f64, now: f64) -> Value {
+fn account_block(a: &Value, threshold: f64, now: f64) -> Block {
     let label = a["label"].as_str().unwrap_or("?");
     let id = a["id"].as_str().unwrap_or(label);
     // what the meters don't say: runs start here, credits, a plan, a refused token
@@ -82,8 +85,7 @@ fn account_block(a: &Value, threshold: f64, now: f64) -> Value {
         .split(" · ")
         .filter(|bit| !bit.is_empty() && !bit.starts_with("5h ") && !bit.starts_with("week "))
         .collect();
-    let mut children = vec![json!({"type": "heading", "id": format!("name:{id}"), "level": 3, "text": label,
-                                    "subtitle": rest.join(" · ")})];
+    let mut children = vec![heading(&format!("name:{id}"), 3, label, Some(&rest.join(" · ")))];
     for (key, name, short) in [("five_hour", "5-hour", "5h"), ("seven_day", "Weekly", "week")] {
         let Some(used) = a[key]["used"].as_f64() else { continue };
         let resets = a[key]["resets"].as_f64().filter(|r| *r != 0.0);
@@ -95,23 +97,44 @@ fn account_block(a: &Value, threshold: f64, now: f64) -> Value {
             None => (used, String::new()),
         };
         let tone = if value >= threshold {
-            "bad"
+            Tone::TONE_BAD
         } else if value >= threshold - 20.0 {
-            "warn"
+            Tone::TONE_WARN
         } else {
-            "good"
+            Tone::TONE_GOOD
         };
-        children.push(json!({"type": "meter", "id": format!("{short}:{id}"), "label": name,
-                             "value": (value * 10.0).round() / 10.0, "max": 100, "tone": tone, "note": note}));
+        let note = Some(note.as_str()).filter(|n| !n.is_empty());
+        children.push(meter(&format!("{short}:{id}"), name, (value * 10.0).round() / 10.0, 100.0, note, tone));
     }
-    json!({"type": "stack", "id": format!("account:{id}"), "axis": "v", "gap": 4, "children": children})
+    let stack = layout::Stack { children, gap: Some(4.0), ..Default::default() };
+    Block {
+        name: Some(format!("account:{id}")),
+        family: Some(Family::Layout(Box::new(Layout {
+            kind: Some(layout::Kind::Stack(Box::new(stack))),
+            ..Default::default()
+        }))),
+        ..Default::default()
+    }
+}
+
+/// Rota's credentials form, opened in place in the pane (Pointman's `credential` block).
+fn credential(name: &str, form: &str, title: &str) -> Block {
+    let credential = input::Credential { form: form.to_string(), title: title.to_string(), ..Default::default() };
+    Block {
+        name: Some(name.to_string()),
+        family: Some(Family::Input(Box::new(Input {
+            kind: Some(input::Kind::Credential(Box::new(credential))),
+            ..Default::default()
+        }))),
+        ..Default::default()
+    }
 }
 
 /// Rota's pane (Pointman's docs/dev/panes.md): the same accounts as blocks, a meter for each window, and
 /// the buttons that move new runs (each a tap on `actions`, its id the button's), then Codex's accounts
 /// under their own heading. Shown whole each time; the SDK sends only what changed, so a meter moves in
 /// place.
-pub fn pane(summary: &Value, now: f64) -> Value {
+pub fn pane(summary: &Value, now: f64) -> Vec<Block> {
     let accounts = summary["accounts"].as_array().cloned().unwrap_or_default();
     let codex = codex_accounts(summary);
     let current = summary["current"].as_str();
@@ -120,35 +143,33 @@ pub fn pane(summary: &Value, now: f64) -> Value {
         Some(c) => format!("New runs start on {c} · it swaps at {threshold:.0}%"),
         None => "No account picked yet".to_string(),
     };
-    let mut blocks = vec![json!({"type": "heading", "id": "head", "level": 1, "text": "Rota", "subtitle": subtitle})];
+    let mut blocks = vec![heading("head", 1, "Rota", Some(&subtitle))];
     if accounts.is_empty() {
-        blocks.push(json!({"type": "empty", "id": "none", "title": "No Claude accounts yet",
-                           "note": "Add one below, or `/rota add` in any thread."}));
+        blocks.push(empty("none", "No Claude accounts yet", Some("Add one below, or `/rota add` in any thread.")));
     }
     blocks.extend(accounts.iter().map(|a| account_block(a, threshold, now)));
     // adding one happens here, in the pane: the apps open rota's credentials form in place (Pointman's
     // `credential` block), Sign in or paste, and a tap on `add` says it's in
-    blocks.push(json!({"type": "credential", "id": "add", "form": "account", "title": "Add a Claude account"}));
+    blocks.push(credential("add", "account", "Add a Claude account"));
     let mut buttons = vec![];
     if accounts.len() > 1 {
-        buttons.push(json!({"id": "swap", "title": "Swap now"}));
+        buttons.push(button("swap", "Swap now"));
     }
     for a in &accounts {
         let label = a["label"].as_str().unwrap_or_default();
         let id = a["id"].as_str().unwrap_or(label);
         if buttons.len() < MAX_BUTTONS && Some(label) != current {
-            buttons.push(json!({"id": format!("use:{id}"), "title": format!("Start runs on {label}")}));
+            buttons.push(button(&format!("use:{id}"), &format!("Start runs on {label}")));
         }
     }
     if !buttons.is_empty() {
-        blocks.push(json!({"type": "actions", "id": "actions", "buttons": buttons}));
+        blocks.push(actions("actions", buttons));
     }
     if !codex.is_empty() {
-        blocks.push(json!({"type": "heading", "id": "codex", "level": 2, "text": "Codex accounts",
-                           "subtitle": "As Codex's /status shows them"}));
+        blocks.push(heading("codex", 2, "Codex accounts", Some("As Codex's /status shows them")));
         blocks.extend(codex.iter().map(|a| account_block(a, threshold, now)));
     }
-    Value::Array(blocks)
+    blocks
 }
 
 /// Each account's windows as grouped bars, as fractions drawn as percentages; the title says which one new
@@ -199,6 +220,25 @@ mod tests {
         assert_eq!(blocks[2]["buttons"][1]["params"], json!({"to": "spare"}));
     }
 
+    /// The pane's blocks in protobuf's standard JSON, as they go to the node.
+    fn as_json(blocks: Vec<Block>) -> Value {
+        serde_json::to_value(blocks).unwrap()
+    }
+
+    fn subtitle(block: &Value) -> &Value {
+        &block["text"]["heading"]["subtitle"]
+    }
+
+    fn children(block: &Value) -> &Value {
+        &block["layout"]["stack"]["children"]
+    }
+
+    /// A meter's value, note and tone.
+    fn reading(block: &Value) -> (Option<f64>, Option<&str>, Option<&str>) {
+        let row = &block["chart"]["data"]["rows"][0];
+        (row[0].as_f64(), row[1].as_str(), block["chart"]["tone"].as_str())
+    }
+
     #[test]
     fn the_pane_has_a_meter_for_each_window_and_buttons_that_move_runs() {
         let mut s = summary();
@@ -207,41 +247,42 @@ mod tests {
         s["accounts"][0]["five_hour"]["resets"] = json!(4102444800.0);
         s["accounts"][0]["seven_day"]["resets"] = json!(1.0); // passed: reset
         s["accounts"][0]["line"] = json!("5h 62% (resets 14:00) · week 31% · runs start here");
-        let blocks = pane(&s, 1000.0);
+        let blocks = as_json(pane(&s, 1000.0));
         let blocks = blocks.as_array().unwrap();
-        assert_eq!(blocks[0]["subtitle"], "New runs start on work · it swaps at 90%");
+        assert_eq!(subtitle(&blocks[0]), "New runs start on work · it swaps at 90%");
         let work = &blocks[1];
-        assert_eq!(work["id"], "account:work");
+        assert_eq!(work["name"], "account:work");
         assert_eq!(
-            work["children"][0],
-            json!({"type": "heading", "id": "name:work", "level": 3, "text": "work",
-                                               "subtitle": "runs start here"})
+            children(work)[0],
+            json!({"name": "name:work", "text": {"markdown": "work",
+                                                 "heading": {"level": 3, "subtitle": "runs start here"}}})
         );
-        let five = &work["children"][1];
-        assert_eq!(
-            (five["id"].as_str(), five["value"].as_f64(), five["tone"].as_str()),
-            (Some("5h:work"), Some(62.0), Some("good"))
-        );
-        assert!(five["note"].as_str().unwrap().starts_with("resets "));
-        assert_eq!(
-            (work["children"][2]["value"].as_f64(), work["children"][2]["note"].as_str()),
-            (Some(0.0), Some("reset"))
-        );
+        let five = &children(work)[1];
+        assert_eq!(five["name"], "5h:work");
+        assert_eq!(five["chart"]["title"], "5-hour");
+        let (value, note, tone) = reading(five);
+        assert_eq!((value, tone), (Some(62.0), Some("TONE_GOOD")));
+        assert!(note.unwrap().starts_with("resets "));
+        assert_eq!(reading(&children(work)[2]), (Some(0.0), Some("reset"), Some("TONE_GOOD")));
         // no windows known yet: its line says so, and no meters
-        assert_eq!(blocks[2]["children"].as_array().unwrap().len(), 1);
-        assert_eq!(blocks[2]["children"][0]["subtitle"], "not checked yet");
-        assert_eq!(blocks[3]["children"][1]["tone"], "bad"); // old, at 99.5%
+        assert_eq!(children(&blocks[2]).as_array().unwrap().len(), 1);
+        assert_eq!(subtitle(&children(&blocks[2])[0]), "not checked yet");
+        assert_eq!(reading(&children(&blocks[3])[1]).2, Some("TONE_BAD")); // old, at 99.5%
         assert_eq!(
             blocks[4],
-            json!({"type": "credential", "id": "add", "form": "account", "title": "Add a Claude account"}),
+            json!({"name": "add", "input": {"credential": {"form": "account", "title": "Add a Claude account"}}}),
             "adding one: rota's credentials form, opened in place in the pane"
         );
-        let ids: Vec<&str> =
-            blocks[5]["buttons"].as_array().unwrap().iter().map(|b| b["id"].as_str().unwrap()).collect();
+        let ids: Vec<&str> = blocks[5]["input"]["actions"]["buttons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|b| b["id"].as_str().unwrap())
+            .collect();
         assert_eq!(ids, ["swap", "use:spare", "use:old"]);
-        let none = pane(&json!({"current": null, "accounts": []}), 0.0);
-        assert_eq!(none[1]["type"], "empty");
-        assert_eq!(none[2]["type"], "credential");
+        let none = as_json(pane(&json!({"current": null, "accounts": []}), 0.0));
+        assert_eq!(none[1]["empty"]["title"], "No Claude accounts yet");
+        assert_eq!(none[2]["input"]["credential"]["form"], "account");
     }
 
     /// James, Pointman thread 3359 [7694]: Codex's accounts after Claude's, in the text, the chart and the pane.
@@ -260,13 +301,13 @@ mod tests {
         assert_eq!(spec["title"], "Claude and Codex accounts · Claude runs start on work");
         // Codex's accounts have no buttons: the node runs Claude Code only
         assert_eq!(blocks[2]["buttons"].as_array().unwrap().len(), 3);
-        let pane = pane(&s, 1000.0);
+        let pane = as_json(pane(&s, 1000.0));
         let pane = pane.as_array().unwrap();
-        let at = pane.iter().position(|b| b["id"] == "codex").unwrap();
-        assert_eq!(pane[at - 1]["id"], "actions");
-        assert_eq!(pane[at + 1]["id"], "account:codex.default");
-        assert_eq!(pane[at + 1]["children"][0]["subtitle"], "Business plan");
-        assert_eq!(pane[at + 1]["children"][1]["id"], "week:codex.default");
+        let at = pane.iter().position(|b| b["name"] == "codex").unwrap();
+        assert_eq!(pane[at - 1]["name"], "actions");
+        assert_eq!(pane[at + 1]["name"], "account:codex.default");
+        assert_eq!(subtitle(&children(&pane[at + 1])[0]), "Business plan");
+        assert_eq!(children(&pane[at + 1])[1]["name"], "week:codex.default");
         // and none of it on a machine without Codex
         let (text, _) = view(&summary(), None);
         assert!(!text.contains("Codex") && !text.contains("**Claude**"));
