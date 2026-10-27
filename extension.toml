@@ -1,10 +1,10 @@
 [extension]
 id = "rota"
 name = "Rota"
-version = "0.15.0"
+version = "0.16.0"
 publisher = "aurelio"
 summary = "Claude accounts taken in turns: each run starts on the account with the most room left."
-node = ">=0.2.0"
+node = ">=0.4.0"
 platforms = ["macos-arm64", "macos-x86_64", "linux-x86_64", "linux-arm64"]
 
 [run]

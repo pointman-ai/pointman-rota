@@ -17,7 +17,7 @@ use pointman_extension::protocol::{
     SessionEndedRequest, SessionEndedResponse, SessionPrepareRequest, SessionPrepareResponse,
 };
 use pointman_extension::v1::health::{self, part};
-use pointman_extension::v1::{member_ref, MemberRef, PaneInput};
+use pointman_extension::v1::{MemberRef, PaneInput};
 use pointman_extension::{convert, Extension, Handle, Job, Pane, Refused};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -157,10 +157,7 @@ fn has_connectors(p: &SessionPrepareRequest) -> bool {
 
 /// An agent's handle as rota.agent keeps it: no @, lowercase.
 fn handle_of(who: &MemberRef) -> String {
-    match &who.kind {
-        Some(member_ref::Kind::Handle(h)) => h.trim_start_matches('@').to_lowercase(),
-        _ => String::new(),
-    }
+    who.name.trim_start_matches('@').to_lowercase()
 }
 
 /// Whether an account can take a run at all: its token wasn't refused and it isn't full.
@@ -616,7 +613,7 @@ impl Rota {
             // 1018 [4263]); the agent's folder's account
             let own = has_connectors(p).then(|| DEFAULT.to_string());
             let pins = [
-                st.agents.get(&handle_of(&p.handle)).cloned(),
+                st.agents.get(&handle_of(&p.agent)).cloned(),
                 own,
                 folder_key(&p.folder).and_then(|k| st.folders.get(&k)).cloned(),
             ];
@@ -758,14 +755,14 @@ impl Rota {
             bail!("rota signs in Claude accounts only (form: account)");
         }
         label_in(&p.label, "label")?;
-        self.signins.start(&p.session.value, Duration::from_secs(60))
+        self.signins.start(&p.session.id, Duration::from_secs(60))
     }
 
     /// The code the sign-in page showed: the token comes back for the node to seal into the vault.
     fn sign_in_code(&self, p: &CredentialsCodeRequest) -> anyhow::Result<CredentialsCodeResponse> {
         let dir = self.h.node().state_dir;
         let keep = (!dir.is_empty()).then(|| PathBuf::from(dir));
-        let value = self.signins.code(&p.session.value, &p.code, Duration::from_secs(120), keep.as_deref())?;
+        let value = self.signins.code(&p.session.id, &p.code, Duration::from_secs(120), keep.as_deref())?;
         Ok(CredentialsCodeResponse { value, ..Default::default() })
     }
 
