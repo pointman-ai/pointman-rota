@@ -582,6 +582,36 @@ fn moves_cooldown_and_agents() {
     assert_eq!(host.run("rota.agent", json!({"agent": "scene"}))["agents"], json!({}));
 }
 
+/// EXT-101 (James, Pointman thread 8028 [23890]): `/rota swap work scene` moves only that agent's runs; the
+/// machine's other runs stay where they were, and `/rota agent scene` puts it back on the rule.
+#[test]
+fn swapping_one_agent() {
+    let host = Host::start();
+    host.parts(claude_checked);
+    host.run("rota.swap", json!({"to": "spare"}));
+    let got = host.run("rota.swap", json!({"to": "work", "agent": "@Scene"}));
+    assert_eq!(got["current"], "spare");
+    assert_eq!(got["agents"], json!({"scene": "work"}));
+    assert_eq!(got["message"], "@scene's new runs start on work; other runs on studio stay on spare");
+    let prepare = |run: &str, handle: &str| {
+        host.account(json!({"run": {"value": run}, "handle": {"handle": handle}, "client": "claude"}))
+    };
+    assert_eq!(prepare("run_1", "scene"), "work");
+    assert_eq!(prepare("run_2", "search"), "spare");
+    // none named: the one with the most room (work and spare are both at 20%, default at 95%)
+    let room = host.run("rota.swap", json!({"agent": "rig"}))["agents"]["rig"].clone();
+    assert!(room == "work" || room == "spare", "{room}");
+    // the same checks as a swap of the machine
+    assert!(host.refuses("rota.swap", json!({"to": "old", "agent": "scene"})).contains("token was refused"));
+    assert!(host.refuses("rota.swap", json!({"to": "gone", "agent": "scene"})).contains("no account 'gone'"));
+    assert!(host.refuses("rota.swap", json!({"to": "work", "agent": "@"})).contains("agent: its handle"));
+    // rota.agent, now a slash verb, checks a named account as swap does: a typo isn't a silent fall back to the rule
+    assert!(host.refuses("rota.agent", json!({"agent": "scene", "account": "wrok"})).contains("no account 'wrok'"));
+    assert!(host.refuses("rota.agent", json!({"agent": "scene", "account": "old"})).contains("token was refused"));
+    assert_eq!(host.run("rota.agent", json!({"agent": "scene"}))["agents"], json!({"rig": room}));
+    assert_eq!(prepare("run_3", "scene"), "spare");
+}
+
 /// MB-216: rota runs Claude Code's own setup-token, gives the node the link that works on any device (never
 /// this machine's localhost, and no browser opens here), and turns the pasted code into the token as the
 /// payload the vault takes.

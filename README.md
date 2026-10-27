@@ -92,10 +92,10 @@ Run on a machine like any extension's: `/rota swap work` in a thread, or `create
 |---|---|---|
 | `rota.usage` | `/rota usage` | Each account's 5-hour and weekly use, and which one new runs start on |
 | `rota.add` | `/rota add` | Add a Claude account: sign in, or paste a token |
-| `rota.swap {to}` | `/rota swap [to]` | New runs start on that account now (none named: the one with the most room), and stay until it's full |
+| `rota.swap {to, agent}` | `/rota swap [to] [agent]` | New runs start on that account now (none named: the one with the most room), and stay until it's full. With an agent (`/rota swap work scene`), only that agent's runs move, as `rota.agent` maps them; the machine's other runs stay put |
 | `rota.rename {from, to}` | `/rota rename default personal` | The name an account is shown and typed by. Its vault item doesn't change; renamed back to its label, the name goes |
 | `rota.folder {folder, account}` | | Runs in that agent folder start on that account while it has room (no account: the folder follows the rule again) |
-| `rota.agent {agent, account}` | | The same for an agent, by its handle. An agent's account wins over its folder's |
+| `rota.agent {agent, account}` | `/rota agent scene [account]` | The same for an agent, by its handle; `/rota agent scene` alone puts it back on the rule. An agent's account wins over its folder's |
 | `rota.status` | | Each account, its limits, and the last 10 moves |
 
 ## Settings
