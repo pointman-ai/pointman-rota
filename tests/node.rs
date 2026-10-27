@@ -605,6 +605,9 @@ fn swapping_one_agent() {
     assert!(host.refuses("rota.swap", json!({"to": "old", "agent": "scene"})).contains("token was refused"));
     assert!(host.refuses("rota.swap", json!({"to": "gone", "agent": "scene"})).contains("no account 'gone'"));
     assert!(host.refuses("rota.swap", json!({"to": "work", "agent": "@"})).contains("agent: its handle"));
+    // rota.agent, now a slash verb, checks a named account as swap does: a typo isn't a silent fall back to the rule
+    assert!(host.refuses("rota.agent", json!({"agent": "scene", "account": "wrok"})).contains("no account 'wrok'"));
+    assert!(host.refuses("rota.agent", json!({"agent": "scene", "account": "old"})).contains("token was refused"));
     assert_eq!(host.run("rota.agent", json!({"agent": "scene"}))["agents"], json!({"rig": room}));
     assert_eq!(prepare("run_3", "scene"), "spare");
 }

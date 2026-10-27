@@ -886,10 +886,12 @@ impl Rota {
     /// An agent's runs start on this account while it has room (none named: back to the rule).
     fn agent(&self, params: &Value) -> anyhow::Result<Value> {
         let handle = handle_in(params)?;
-        let named = if truthy(params.get("account")) { Some(label_of(params, "account")?) } else { None };
+        // a named account gets swap's checks, so `/rota agent scene wrok` says so rather than reading as done
+        let named = truthy(params.get("account")).then(|| json!({"to": params.get("account")}));
+        let toks = self.all_tokens();
         let label = {
             let mut st = self.state();
-            let label = named.map(|n| st.label(n));
+            let label = named.map(|to| self.startable(&st, &toks, &to)).transpose()?;
             match &label {
                 Some(label) => st.agents.insert(handle.clone(), label.clone()),
                 None => st.agents.remove(&handle),
