@@ -1,7 +1,7 @@
 [extension]
 id = "rota"
 name = "Rota"
-version = "0.14.0"
+version = "0.15.0"
 publisher = "aurelio"
 summary = "Claude accounts taken in turns: each run starts on the account with the most room left."
 node = ">=0.2.0"
@@ -78,9 +78,9 @@ summary = "Add a Claude account: sign in to it, or paste a token from claude set
 [[commands]]
 kind = "rota.swap"
 title = "Start new runs on another account"
-params = { type = "object", properties = { to = { type = "string", description = "The account's label (work); left out, the one with the most room." } } }
+params = { type = "object", properties = { to = { type = "string", description = "The account's label (work); left out, the one with the most room." }, agent = { type = "string", description = "An agent's handle (scene): only its runs move; left out, the machine's." } } }
 slash = "swap"
-summary = "Start new runs on another account, or the one with the most room"
+summary = "Start new runs on another account (most room if none named); with an agent, only its: /rota swap work scene"
 
 [[commands]]
 kind = "rota.rename"
@@ -93,6 +93,8 @@ summary = "Rename an account: /rota rename default james-max"
 kind = "rota.agent"
 title = "Start an agent's runs on one account"
 params = { type = "object", required = ["agent"], properties = { agent = { type = "string", description = "The agent's handle (scene)." }, account = { type = "string", description = "The account's label; left out, the agent's runs follow the rule again." } } }
+slash = "agent"
+summary = "Start an agent's runs on an account, or with none named, back to the rule: /rota agent scene"
 
 [[commands]]
 kind = "rota.folder"

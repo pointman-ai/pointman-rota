@@ -187,6 +187,16 @@ fn folder_key(folder: &str) -> Option<String> {
     (!folder.is_empty()).then(|| util::resolve(&util::expand(folder)).to_string_lossy().into_owned())
 }
 
+/// The `agent` param as rota.agent keeps it: no @, lowercase.
+fn handle_in(p: &Value) -> anyhow::Result<String> {
+    let handle = text(p.get("agent")).trim().trim_start_matches('@').to_lowercase();
+    let short: String = handle.replace('-', "_").chars().take(32).collect();
+    if handle.is_empty() || !accounts::is_label(&short) {
+        bail!("agent: its handle, like scene");
+    }
+    Ok(handle)
+}
+
 fn label_of(p: &Value, key: &str) -> anyhow::Result<String> {
     label_in(&text(p.get(key)), key)
 }
@@ -780,28 +790,38 @@ impl Rota {
         )))
     }
 
+    /// The account `to` names (none named: the one with the most room), if runs can start on it here.
+    fn startable(&self, st: &State, toks: &Tokens, params: &Value) -> anyhow::Result<String> {
+        let labels: Vec<String> = toks.iter().map(|(l, _)| l.clone()).collect();
+        let to = if truthy(params.get("to")) {
+            st.label(label_of(params, "to")?)
+        } else {
+            accounts::most_room(&labels, &st.seen, None).unwrap_or_default()
+        };
+        if token_of(toks, &to).is_none() {
+            let names: Vec<String> = labels.iter().map(|l| st.shown(l)).collect();
+            bail!("no account '{}' to start runs on here: {}", st.shown(&to), names.join(", "));
+        }
+        if st.seen.get(&to).is_some_and(|s| s.refused() && s.no_login) {
+            bail!("{} has no Claude login on {}: sign Claude Code in here first", st.shown(&to), self.machine());
+        }
+        if st.seen.get(&to).is_some_and(Seen::refused) {
+            bail!("{}'s token was refused: sign it in again first", st.shown(&to));
+        }
+        Ok(to)
+    }
+
     /// New runs start on this account from now on (or, with none named, the one with the most room), and
-    /// stay there until it's full, as after any move.
+    /// stay there until it's full, as after any move. With an agent, only that agent's runs do (EXT-101;
+    /// James, Pointman thread 8028 [23890]), as rota.agent maps them; the machine's other runs stay put.
     fn swap(&self, params: &Value) -> anyhow::Result<Value> {
+        if truthy(params.get("agent")) {
+            return self.swap_agent(params);
+        }
         let toks = self.all_tokens();
         let was = {
             let mut st = self.state();
-            let labels: Vec<String> = toks.iter().map(|(l, _)| l.clone()).collect();
-            let to = if truthy(params.get("to")) {
-                st.label(label_of(params, "to")?)
-            } else {
-                accounts::most_room(&labels, &st.seen, None).unwrap_or_default()
-            };
-            if token_of(&toks, &to).is_none() {
-                let names: Vec<String> = labels.iter().map(|l| st.shown(l)).collect();
-                bail!("no account '{}' to start runs on here: {}", st.shown(&to), names.join(", "));
-            }
-            if st.seen.get(&to).is_some_and(|s| s.refused() && s.no_login) {
-                bail!("{} has no Claude login on {}: sign Claude Code in here first", st.shown(&to), self.machine());
-            }
-            if st.seen.get(&to).is_some_and(Seen::refused) {
-                bail!("{}'s token was refused: sign it in again first", st.shown(&to));
-            }
+            let to = self.startable(&st, &toks, params)?;
             let was = st.current.replace(to.clone());
             if was.as_ref() != Some(&to) {
                 self.moved(&mut st, was.clone(), &to, "asked".into());
@@ -846,13 +866,26 @@ impl Rota {
         Ok(self.answer(format!("{was} is called {now} now")))
     }
 
+    /// One agent's new runs start on this account (none named: the one with the most room) while it has room:
+    /// `/rota swap work scene`. `/rota agent scene` puts it back on the rule.
+    fn swap_agent(&self, params: &Value) -> anyhow::Result<Value> {
+        let handle = handle_in(params)?;
+        let toks = self.all_tokens();
+        let (to, rest) = {
+            let mut st = self.state();
+            let to = self.startable(&st, &toks, params)?;
+            st.agents.insert(handle.clone(), to.clone());
+            self.save_state(&st);
+            (st.shown(&to), st.current.as_ref().map(|c| st.shown(c)))
+        };
+        self.tell();
+        let rest = rest.map_or(String::new(), |c| format!("; other runs on {} stay on {c}", self.machine()));
+        Ok(self.answer(format!("@{handle}'s new runs start on {to}{rest}")))
+    }
+
     /// An agent's runs start on this account while it has room (none named: back to the rule).
     fn agent(&self, params: &Value) -> anyhow::Result<Value> {
-        let handle = text(params.get("agent")).trim().trim_start_matches('@').to_lowercase();
-        let short: String = handle.replace('-', "_").chars().take(32).collect();
-        if handle.is_empty() || !accounts::is_label(&short) {
-            bail!("agent: its handle, like scene");
-        }
+        let handle = handle_in(params)?;
         let named = if truthy(params.get("account")) { Some(label_of(params, "account")?) } else { None };
         let label = {
             let mut st = self.state();
