@@ -97,7 +97,15 @@ impl Host {
         // the board's vault, as the node shows it to rota: the names rota.* covers, and their values
         let node = StandIn::new(env!("CARGO_MANIFEST_DIR"))
             .binary(env!("CARGO_BIN_EXE_rota"))
-            .secrets([("rota.spare", format!("CLAUDE_CODE_OAUTH_TOKEN={}\n", spare())), ("rota.Not A Label", spare())])
+            .secrets([
+                ("rota.spare", format!("CLAUDE_CODE_OAUTH_TOKEN={}\n", spare())),
+                ("rota.Not A Label", spare()),
+                // Grok's own key and a labelled one beside it; ZCode's own only (EXT-113)
+                ("grok.key", "xai-own-key-never-shown".into()),
+                ("grok.key.work", "xai-work-key-never-shown".into()),
+                ("grok.key.Not-A-Label", "xai-x".into()),
+                ("zcode.key", "zcode-own-key-never-shown".into()),
+            ])
             .env("PATH", format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()))
             .env("ROTA_STORE", &store)
             .env("FAKE_CALLS", at("calls"))
@@ -435,6 +443,62 @@ fn codex_usage_in_rota_usage() {
     assert!(got["text"].as_str().unwrap().contains(&format!("**Codex**\n- **default** · {line}")), "{got}");
     let parts = host.parts(|g| g.contains_key("codex.default"));
     assert_eq!(why(&parts, "codex.default"), line);
+}
+
+/// EXT-113: Grok's runs take its keys in turns, moving on after a run on one hits a limit (the node opens the key rota
+/// names, `key_label`); ZCode with one key goes as it did, and a client with no key here gets nothing from rota.
+#[test]
+fn grok_and_zcode_keys() {
+    let host = Host::start();
+    let prepare = |client: &str| host.call("session.prepare", json!({"run": {"id": "run_1"}, "client": client}));
+    let ended = |client: &str, account: &str, status: &str, error: &str| {
+        host.call(
+            "session.ended",
+            json!({"run": {"id": "run_1"}, "client": client, "account": account,
+                   "status": format!("STATUS_{}", status.to_uppercase()), "error": error}),
+        );
+    };
+    // the client's own key first: no label, so the node opens grok.key as without rota
+    assert_eq!(prepare("grok"), json!({"account": "default"}));
+    // a failure that isn't a limit changes nothing
+    ended("grok", "default", "failed", "the session ended without a result");
+    assert_eq!(prepare("grok"), json!({"account": "default"}));
+    // a limit: the next run moves to work, and the node opens grok.key.work for it
+    ended("grok", "default", "failed", "429 Too Many Requests: rate limit exceeded for this API key");
+    assert_eq!(prepare("grok"), json!({"account": "work", "keyLabel": "work"}));
+    assert_eq!(prepare("grok"), json!({"account": "work", "keyLabel": "work"}), "it stays there");
+    let usage = host.run("rota.usage", json!({}));
+    let grok = &usage["keys"]["grok"];
+    assert_eq!(grok["current"], "work");
+    let lines: Vec<(&str, &str)> = grok["keys"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|k| (k["label"].as_str().unwrap(), k["line"].as_str().unwrap()))
+        .collect();
+    assert_eq!(lines.len(), 2, "a name that isn't a label isn't a key: {lines:?}");
+    assert!(lines[0].0 == "default" && lines[0].1.starts_with("sat out after a limit · back at "), "{lines:?}");
+    assert_eq!(lines[1], ("work", "runs start here"));
+    assert!(grok["keys"][0]["said"].as_str().unwrap().contains("rate limit"));
+    let text = usage["text"].as_str().unwrap();
+    assert!(
+        text.contains("**Grok keys** · another key: `/secrets add grok.key.<name>`\n- **default** · sat out"),
+        "{text}"
+    );
+    assert!(!usage.to_string().contains("never-shown"), "rota never opens a client's key");
+    // work at its limit too: nowhere else to go, so the one back soonest
+    ended("grok", "work", "failed", "Usage limit reached for 5 hour");
+    assert_eq!(prepare("grok"), json!({"account": "default"}));
+    // a run on it that ends well: it's ready again
+    ended("grok", "default", "done", "");
+    let grok = &host.run("rota.status", json!({}))["keys"]["grok"];
+    assert_eq!(grok["keys"][0]["line"], "runs start here");
+    // ZCode has its own key only: every run goes there, a limit or not
+    assert_eq!(prepare("zcode"), json!({"account": "default"}));
+    ended("zcode", "default", "failed", "Insufficient balance or no resource package");
+    assert_eq!(prepare("zcode"), json!({"account": "default"}));
+    // no keys at all, or a client rota doesn't take: nothing
+    assert_eq!(prepare("opencode"), json!({}));
 }
 
 /// A Codex session as Codex writes it, with the account's windows in its rate_limits.

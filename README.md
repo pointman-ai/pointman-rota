@@ -84,6 +84,21 @@ same rule, with `CODEX_HOME` set to its home (nothing for the machine's own `~/.
 which takes no turn and under a second, so the machine's own Codex counts what you use in a terminal too.
 They show in `pointman health` as `codex.<label>`.
 
+## Grok and ZCode keys
+
+Grok and ZCode run on an API key, sealed in the vault for the machines that run them: `grok.key` (or
+`zcode.key`) from `/grok add`, shown as `default`. Add more beside it as `<client>.key.<name>`, from the
+app's `/secrets add grok.key.work`. A name is lowercase letters, digits and `-`, up to 32. Rota lists
+these names and never opens them. Before each run it tells the node which key to use (`key_label`, node
+0.4.5), and the node opens that one for the run. If this machine has no seal of it, the run fails.
+
+Neither client says how much of a key is used, so runs stay on one key until a run on it ends at a limit.
+Rota tells that from the run's error: Grok's own limit words, or a usage or spend limit as the node words
+it. That key then sits out an hour (`key_rest_minutes`), and runs move to the next key in order. If every
+key is sitting out, runs go to the one back soonest. A run that ends well on a key clears it. With one key,
+runs go as they did without rota. `/rota usage` and the pane list each client's keys, which one runs use,
+and which are sitting out, under `Grok keys` and `ZCode keys`.
+
 ## Commands
 
 Run on a machine like any extension's: `/rota swap work` in a thread, or `create_job` for agents.
@@ -104,6 +119,7 @@ Run on a machine like any extension's: `/rota swap work` in a thread, or `create
 |---|---|---|
 | `threshold` | 90 | Move new runs off an account once either window is this full (%), 50–100 |
 | `cooldown_minutes` | 10 | After moving runs, stay on the new account this long, unless it can't take runs at all |
+| `key_rest_minutes` | 60 | How long a Grok or ZCode key sits out after a run on it hit a limit |
 | `check_minutes` | 30 | How often an account nothing has run on is checked, and each Codex account asked for its usage |
 
 ## Install, upgrade, versions
@@ -123,7 +139,9 @@ rota@latest` lets them go. For development, `pointman add <folder>` installs a c
   login, so it doesn't move when that account fills up.
 - Per-model weekly limits aren't in Claude Code's stream; the 5-hour and weekly ones are.
 - Gemini accounts: there's no source yet for how much of a Gemini account's quota is used.
-- Renaming a Codex account, or moving Codex runs with `rota.swap`: Claude's only so far.
+- Renaming a Codex account, or moving Codex runs with `rota.swap`: Claude's only so far. The same for Grok's
+  and ZCode's keys, which move only after a limit.
+- OpenCode: it runs on the machine's own sign-in, with no key in the vault to swap.
 
 ## Building and testing
 

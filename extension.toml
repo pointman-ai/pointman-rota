@@ -1,10 +1,10 @@
 [extension]
 id = "rota"
 name = "Rota"
-version = "0.16.0"
+version = "0.17.0"
 publisher = "aurelio"
-summary = "Claude accounts taken in turns: each run starts on the account with the most room left."
-node = ">=0.4.0"
+summary = "Claude accounts taken in turns: each run starts on the account with the most room left. Grok and ZCode keys too, moving on after a limit."
+node = ">=0.4.5"                 # session.prepare's key_label (EXT-113)
 platforms = ["macos-arm64", "macos-x86_64", "linux-x86_64", "linux-arm64"]
 
 [run]
@@ -13,11 +13,14 @@ command = ["bin/rota", "serve"]
 
 [permissions]
 network = true
-secrets = ["rota.*"]             # each account's token, kept in the vault as rota.<label>
+secrets = ["rota.*", "grok.*", "zcode.*"]   # each account's token, kept in the vault as rota.<label>; and the names
+                                            # of Grok's and ZCode's keys (grok.key, grok.key.<label>), never opened:
+                                            # the node opens the one rota names for a run
 
-# the node asks rota which account each Claude Code or Codex run starts on, and tells it how the run ended
+# the node asks rota which account each Claude Code or Codex run starts on, and which key each Grok or ZCode
+# run uses (EXT-113), and tells it how the run ended
 [sessions]
-clients = ["claude", "codex"]
+clients = ["claude", "codex", "grok", "zcode"]
 env = ["CLAUDE_CODE_OAUTH_TOKEN", "CODEX_HOME"]
 
 # each account: the apps offer /rota add, and an alert until there's one (MB-154)
@@ -53,6 +56,12 @@ minimum = 5
 default = 30
 description = "How often an account nothing has run on is checked, with a one-line Haiku run, and each Codex account asked for its usage"
 
+[settings.properties.key_rest_minutes]
+type = "integer"
+minimum = 1
+default = 60
+description = "How long a Grok or ZCode key sits out after a run on it hit a limit"
+
 [[commands]]
 kind = "rota.status"
 title = "Accounts and their limits"
@@ -63,7 +72,7 @@ kind = "rota.usage"
 title = "Each account's use"
 params = { type = "object", properties = {} }
 slash = "usage"
-summary = "Each Claude and Codex account's 5-hour and weekly use, and which one new runs start on"
+summary = "Each Claude and Codex account's 5-hour and weekly use, each Grok and ZCode key, and which ones new runs start on"
 
 # `/rota add` is rota's own command (James, Pointman thread 1018 [4459]): the apps open the account form for
 # it, so Sign in or a pasted token goes into the vault and never into a post
