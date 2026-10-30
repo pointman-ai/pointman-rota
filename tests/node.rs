@@ -97,15 +97,7 @@ impl Host {
         // the board's vault, as the node shows it to rota: the names rota.* covers, and their values
         let node = StandIn::new(env!("CARGO_MANIFEST_DIR"))
             .binary(env!("CARGO_BIN_EXE_rota"))
-            .secrets([
-                ("rota.spare", format!("CLAUDE_CODE_OAUTH_TOKEN={}\n", spare())),
-                ("rota.Not A Label", spare()),
-                // Grok's own key and a labelled one beside it; ZCode's own only (EXT-113)
-                ("grok.key", "xai-own-key-never-shown".into()),
-                ("grok.key.work", "xai-work-key-never-shown".into()),
-                ("grok.key.Not-A-Label", "xai-x".into()),
-                ("zcode.key", "zcode-own-key-never-shown".into()),
-            ])
+            .secrets([("rota.spare", format!("CLAUDE_CODE_OAUTH_TOKEN={}\n", spare())), ("rota.Not A Label", spare())])
             .env("PATH", format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()))
             .env("ROTA_STORE", &store)
             .env("FAKE_CALLS", at("calls"))
@@ -445,12 +437,19 @@ fn codex_usage_in_rota_usage() {
     assert_eq!(why(&parts, "codex.default"), line);
 }
 
-/// EXT-113: Grok's runs take its keys in turns, moving on after a run on one hits a limit (the node opens the key rota
-/// names, `key_label`); ZCode with one key goes as it did, and a client with no key here gets nothing from rota.
+/// EXT-113: Grok's runs take its keys in turns, moving on after a run on one hits a limit (the node lists the keys
+/// this machine holds, `key_labels`, and opens the one rota names, `key_label`); ZCode with one key goes as it did,
+/// and a client with no key here gets nothing from rota.
 #[test]
 fn grok_and_zcode_keys() {
     let host = Host::start();
-    let prepare = |client: &str| host.call("session.prepare", json!({"run": {"id": "run_1"}, "client": client}));
+    // as the node lists them: Grok's own key (""), a labelled one, and a name that isn't a label; ZCode's own only
+    let offered = |client: &str| if client == "grok" { json!(["", "work", "Not-A-Label"]) } else { json!([""]) };
+    let prepare = |client: &str| {
+        host.call("session.prepare", json!({"run": {"id": "run_1"}, "client": client, "keyLabels": offered(client)}))
+    };
+    // before a Grok run, rota hasn't heard of its keys
+    assert!(host.run("rota.usage", json!({}))["keys"].get("grok").is_none());
     let ended = |client: &str, account: &str, status: &str, error: &str| {
         host.call(
             "session.ended",
@@ -485,7 +484,6 @@ fn grok_and_zcode_keys() {
         text.contains("**Grok keys** · another key: `/secrets add grok.key.<name>`\n- **default** · sat out"),
         "{text}"
     );
-    assert!(!usage.to_string().contains("never-shown"), "rota never opens a client's key");
     // work at its limit too: nowhere else to go, so the one back soonest
     ended("grok", "work", "failed", "Usage limit reached for 5 hour");
     assert_eq!(prepare("grok"), json!({"account": "default"}));
@@ -498,6 +496,9 @@ fn grok_and_zcode_keys() {
     ended("zcode", "default", "failed", "Insufficient balance or no resource package");
     assert_eq!(prepare("zcode"), json!({"account": "default"}));
     // no keys at all, or a client rota doesn't take: nothing
+    let none = host.call("session.prepare", json!({"run": {"id": "run_1"}, "client": "zcode", "keyLabels": []}));
+    assert_eq!(none, json!({}));
+    assert!(host.run("rota.usage", json!({}))["keys"].get("zcode").is_none(), "its keys are gone: so is its list");
     assert_eq!(prepare("opencode"), json!({}));
 }
 

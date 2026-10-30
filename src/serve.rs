@@ -97,14 +97,14 @@ impl State {
     }
 }
 
-/// The vault's names under one prefix as this machine last saw them: `rota.` (its Claude accounts), `grok.`
-/// and `zcode.` (their keys).
+/// The vault's rota.* items as this machine last saw them.
 #[derive(Default)]
 struct Vault {
     listed: Option<Instant>,
     names: Vec<String>,
     /// The list being asked for behind.
     asking: Option<Receiver<Result<Vec<String>, String>>>,
+    opened: HashMap<String, (Instant, Option<String>)>,
     said: Option<String>,
 }
 
@@ -125,9 +125,9 @@ fn relist(age: Option<Duration>, asking: bool) -> Relist {
     }
 }
 
-/// The vault's names under a prefix, as the node lists them.
-fn list(h: &Handle, prefix: &str) -> Result<Vec<String>, String> {
-    h.secrets(prefix).map_err(|e| e.to_string())
+/// The vault's rota.* names, as the node lists them.
+fn list(h: &Handle) -> Result<Vec<String>, String> {
+    h.secrets("rota.").map_err(|e| e.to_string())
 }
 
 pub struct Rota {
@@ -136,10 +136,7 @@ pub struct Rota {
     /// Whether the state has been read from its file: at start, or by whatever touches it first (a check
     /// can beat on_start there, and mustn't write over the file before it's read)
     loaded: AtomicBool,
-    /// By prefix.
-    vault: Mutex<HashMap<String, Vault>>,
-    /// Each rota.* token opened, by name, and when.
-    opened: Mutex<HashMap<String, (Instant, Option<String>)>>,
+    vault: Mutex<Vault>,
     signins: SignIns,
 }
 
@@ -263,7 +260,6 @@ impl Rota {
             state: Mutex::default(),
             loaded: AtomicBool::new(false),
             vault: Mutex::default(),
-            opened: Mutex::default(),
             signins: SignIns::default(),
         }
     }
@@ -280,70 +276,65 @@ impl Rota {
         self.h.machine()
     }
 
-    /// The vault's names under `prefix` this machine holds: the list kept, asked for again behind once it's a
-    /// minute old, or first when it's older than OPEN_EVERY. An older node, or a client that isn't installed
-    /// here, lists none.
-    fn listed(&self, prefix: &str) -> Vec<String> {
-        let mut all = self.vault.lock().unwrap_or_else(|e| e.into_inner());
-        let v = all.entry(prefix.to_string()).or_default();
-        let mut got = None;
-        if let Some(asking) = &v.asking {
-            match asking.try_recv() {
-                Ok(answer) => got = Some(answer),
-                Err(TryRecvError::Disconnected) => v.asking = None,
-                Err(TryRecvError::Empty) => {}
-            }
-        }
-        if got.is_some() {
-            v.asking = None;
-        }
-        match relist(v.listed.map(|t| t.elapsed()), v.asking.is_some()) {
-            Relist::Now => {
-                v.listed = Some(Instant::now());
-                v.asking = None;
-                got = Some(list(&self.h, prefix));
-            }
-            Relist::Behind => {
-                v.listed = Some(Instant::now());
-                let (tx, rx) = mpsc::channel();
-                v.asking = Some(rx);
-                let (h, prefix) = (self.h.clone(), prefix.to_string());
-                std::thread::spawn(move || tx.send(list(&h, &prefix)));
-            }
-            Relist::Kept => {}
-        }
-        match got {
-            Some(Ok(names)) => {
-                v.names = names;
-                v.said = None;
-            }
-            Some(Err(e)) if v.said.as_ref() != Some(&e) => {
-                self.h.log(format!("nothing listed under {prefix} in the vault: {e}"));
-                v.said = Some(e);
-            }
-            Some(Err(_)) | None => {}
-        }
-        v.names.clone()
-    }
-
     /// The accounts kept in the board's vault as `rota.<label>`, for this machine: their names listed and
     /// each token opened through the node, which only lets rota see rota.* (MB-106).
     fn vault_tokens(&self) -> Vec<(String, String)> {
-        let names = self.listed("rota.");
+        let names = {
+            let mut v = self.vault.lock().unwrap_or_else(|e| e.into_inner());
+            let mut got = None;
+            if let Some(asking) = &v.asking {
+                match asking.try_recv() {
+                    Ok(answer) => got = Some(answer),
+                    Err(TryRecvError::Disconnected) => v.asking = None,
+                    Err(TryRecvError::Empty) => {}
+                }
+            }
+            if got.is_some() {
+                v.asking = None;
+            }
+            match relist(v.listed.map(|t| t.elapsed()), v.asking.is_some()) {
+                Relist::Now => {
+                    v.listed = Some(Instant::now());
+                    v.asking = None;
+                    got = Some(list(&self.h));
+                }
+                Relist::Behind => {
+                    v.listed = Some(Instant::now());
+                    let (tx, rx) = mpsc::channel();
+                    v.asking = Some(rx);
+                    let h = self.h.clone();
+                    std::thread::spawn(move || tx.send(list(&h)));
+                }
+                Relist::Kept => {}
+            }
+            match got {
+                Some(Ok(names)) => {
+                    v.names = names;
+                    v.said = None;
+                }
+                // an older node or core: the local file only
+                Some(Err(e)) if v.said.as_ref() != Some(&e) => {
+                    self.h.log(format!("no accounts from the vault: {e}"));
+                    v.said = Some(e);
+                }
+                Some(Err(_)) | None => {}
+            }
+            v.names.clone()
+        };
         let mut out = vec![];
         for name in names {
             let Some(label) = name.strip_prefix("rota.").map(str::to_lowercase) else { continue };
             if label == DEFAULT || !accounts::is_label(&label) {
                 continue;
             }
-            let kept = self.opened.lock().unwrap_or_else(|e| e.into_inner()).get(&name).cloned();
+            let kept = self.vault.lock().unwrap_or_else(|e| e.into_inner()).opened.get(&name).cloned();
             let token = match kept {
                 Some((at, token)) if at.elapsed() <= OPEN_EVERY => token,
                 _ => match self.h.secret(&name) {
                     Ok(value) => {
                         let token = accounts::find_token(&value);
-                        let mut opened = self.opened.lock().unwrap_or_else(|e| e.into_inner());
-                        opened.insert(name.clone(), (Instant::now(), token.clone()));
+                        let mut v = self.vault.lock().unwrap_or_else(|e| e.into_inner());
+                        v.opened.insert(name.clone(), (Instant::now(), token.clone()));
                         token
                     }
                     Err(e) => {
@@ -411,34 +402,23 @@ impl Rota {
         60.0 * self.setting("key_rest_minutes").unwrap_or(60.0)
     }
 
-    /// A Grok or ZCode client's keys here, in the order runs move through them (keys.rs).
-    fn client_keys(&self, client: &str) -> Vec<String> {
-        keys::labels(client, &self.listed(&format!("{client}.")))
-    }
-
-    /// Each Grok or ZCode client's keys here (listed before the state is locked: a list can be a round trip to core).
-    fn all_keys(&self) -> Vec<(&'static str, &'static str, Vec<String>)> {
-        keys::CLIENTS.iter().map(|(client, name)| (*client, *name, self.client_keys(client))).collect()
-    }
-
-    /// Each Grok or ZCode client with a key here: its keys, which one runs start on, and each one's line.
-    fn keys_summary(all: &[(&str, &str, Vec<String>)], st: &State, now: f64) -> Value {
+    /// Each Grok or ZCode client with a key here, as its last run heard them: its keys, which one runs start on,
+    /// and each one's line.
+    fn keys_summary(st: &State, now: f64) -> Value {
         let mut out = serde_json::Map::new();
-        for (client, name, labels) in all {
-            if labels.is_empty() {
-                continue;
-            }
-            let kept = st.keys.get(*client).cloned().unwrap_or_default();
-            let rows: Vec<Value> = labels
+        for (client, name) in keys::CLIENTS {
+            let Some(kept) = st.keys.get(client).filter(|k| !k.labels.is_empty()) else { continue };
+            let rows: Vec<Value> = kept
+                .labels
                 .iter()
                 .map(|label| {
                     let until = kept.limited.get(label).map(|l| l.until).filter(|u| now < *u);
-                    json!({"label": label, "id": format!("{client}.{label}"), "line": keys::describe(label, &kept, now),
+                    json!({"label": label, "id": format!("{client}.{label}"), "line": keys::describe(label, kept, now),
                            "limited_until": until.map(|u| u as i64),
                            "said": kept.limited.get(label).filter(|_| until.is_some()).map(|l| &l.said)})
                 })
                 .collect();
-            let current = kept.current.filter(|c| labels.contains(c));
+            let current = kept.current.as_ref().filter(|c| kept.labels.contains(*c));
             out.insert(client.to_string(), json!({"name": name, "current": current, "keys": rows}));
         }
         Value::Object(out)
@@ -462,7 +442,6 @@ impl Rota {
         let toks = self.all_tokens();
         let store = accounts::load_store(None);
         let codex_labels = codex::labels(&store);
-        let keyed = self.all_keys();
         let now = now();
         let st = self.state();
         let current = st.current.as_deref();
@@ -529,7 +508,7 @@ impl Rota {
             .collect();
         json!({"current": current.map(|c| st.shown(c)), "threshold": self.threshold(), "folders": named(&st.folders),
                "agents": named(&st.agents), "moves": moves, "accounts": rows,
-               "codex": {"current": cx.current, "accounts": codex_rows}, "keys": Rota::keys_summary(&keyed, &st, now)})
+               "codex": {"current": cx.current, "accounts": codex_rows}, "keys": Rota::keys_summary(&st, now)})
     }
 
     /// What changed goes to the apps: the event (only when it did), and each open accounts pane, whose
@@ -547,8 +526,7 @@ impl Rota {
     fn tapped(&self, event: &PaneInput) -> anyhow::Result<()> {
         let (button, block) = (event.str("value").unwrap_or_default(), event.str("block"));
         if event.kind == "tap" && block == Some("add") {
-            // a Claude account, or a key from the vault's own form: every list is asked for again
-            self.vault.lock().unwrap_or_else(|e| e.into_inner()).values_mut().for_each(|v| v.listed = None);
+            self.vault.lock().unwrap_or_else(|e| e.into_inner()).listed = None;
             self.tell();
             return Ok(());
         }
@@ -656,7 +634,7 @@ impl Rota {
         match p.client.as_str() {
             "codex" => return Ok(self.prepare_codex()),
             "claude" => {}
-            client if keys::takes(client) => return Ok(self.prepare_key(client)),
+            client if keys::takes(client) => return Ok(self.prepare_key(client, &p.key_labels)),
             _ => return Ok(SessionPrepareResponse::default()),
         }
         let toks = self.all_tokens();
@@ -705,26 +683,33 @@ impl Rota {
         Ok(run_on(&label, token_of(&toks, &label).unwrap_or(&None)))
     }
 
-    /// A Grok or ZCode run's key (EXT-113): its label for the node, which opens `<client>.key.<label>` for the run,
-    /// or none for the client's own key. With no key here at all, nothing: the run goes as it would without rota.
-    fn prepare_key(&self, client: &str) -> SessionPrepareResponse {
-        let labels = self.client_keys(client);
-        let (label, moved) = {
+    /// A Grok or ZCode run's key (EXT-113), of those the node says this machine holds (`key_labels`): its label for
+    /// the node, which opens `<client>.key.<label>` for the run, or none for the client's own key. With no key here
+    /// at all, nothing: the run goes as it would without rota.
+    fn prepare_key(&self, client: &str, offered: &[String]) -> SessionPrepareResponse {
+        let labels = keys::labels(offered);
+        let (label, changed) = {
             let mut st = self.state();
             let kept = st.keys.entry(client.to_string()).or_default();
-            let Some(label) = keys::choose(&labels, kept, now()) else { return SessionPrepareResponse::default() };
-            let moved = kept.current.as_deref() != Some(label.as_str());
-            if moved {
-                let was = kept.current.replace(label.clone());
+            // kept for `/rota usage` and the pane, which only hear of the keys with a run
+            let mut changed = kept.labels != labels;
+            kept.labels = labels;
+            let label = keys::choose(&kept.labels, kept, now());
+            if let Some(to) = label.as_ref().filter(|l| kept.current.as_ref() != Some(*l)) {
+                let was = kept.current.replace(to.clone());
                 let name = keys::name(client);
-                self.h.log(format!("{name} runs use its {label} key now (was {})", was.as_deref().unwrap_or("None")));
+                self.h.log(format!("{name} runs use its {to} key now (was {})", was.as_deref().unwrap_or("None")));
+                changed = true;
+            }
+            if changed {
                 self.save_state(&st);
             }
-            (label, moved)
+            (label, changed)
         };
-        if moved {
+        if changed {
             self.tell();
         }
+        let Some(label) = label else { return SessionPrepareResponse::default() };
         let key_label = (label != DEFAULT).then(|| label.clone());
         SessionPrepareResponse { account: Some(label), key_label, ..Default::default() }
     }

@@ -2,8 +2,9 @@
 //! ZCode. Neither has a usage number to read, so rota moves on when one fails.
 //!
 //! - **The keys** are the client's own vault items: `<client>.key` (its `/grok add`, shown as `default`) and any
-//!   `<client>.key.<label>` beside it (`grok.key.work`). Rota only lists their names. The node opens the one rota
-//!   names (`key_label`, node 0.4.5), and a run never gets a key from rota itself.
+//!   `<client>.key.<label>` beside it (`grok.key.work`). The node lists them for rota by label with each run
+//!   (`key_labels`) and opens the one rota names (`key_label`, node 0.4.5): rota can't open them, and a run never
+//!   gets a key from rota itself.
 //! - **The rule:** runs stay on a key until a run on it ends at a limit, which rota tells from the run's error.
 //!   That key then sits out `key_rest_minutes` (60), and runs move to the next key in order that isn't sitting
 //!   out. With every key sitting out, runs go to the one back soonest. A run that ends well clears its key.
@@ -47,19 +48,13 @@ pub fn is_label(s: &str) -> bool {
         && s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
-/// A client's keys from the vault's names under `<client>.`, in the order runs move through them: its own key
-/// (`default`) first, then the labelled ones by label.
-pub fn labels(client: &str, names: &[String]) -> Vec<String> {
-    let own = format!("{client}.key");
-    let mut out: Vec<String> = names
-        .iter()
-        .filter_map(|n| n.strip_prefix(&format!("{own}.")))
-        .filter(|l| *l != DEFAULT && is_label(l))
-        .map(String::from)
-        .collect();
+/// A client's keys from the labels the node lists for a run (`key_labels`, "" for its own key), in the order runs
+/// move through them: its own key (`default`) first, then the labelled ones by label.
+pub fn labels(offered: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = offered.iter().filter(|l| l.as_str() != DEFAULT && is_label(l)).cloned().collect();
     out.sort();
     out.dedup();
-    if names.contains(&own) {
+    if offered.iter().any(String::is_empty) {
         out.insert(0, DEFAULT.into());
     }
     out
@@ -80,6 +75,9 @@ pub struct Limited {
 /// What rota keeps of one client's keys.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 pub struct Keys {
+    /// Its keys here as the node last listed them for a run, in rota's order.
+    #[serde(default)]
+    pub labels: Vec<String>,
     /// The key runs start on.
     #[serde(default)]
     pub current: Option<String>,
@@ -148,11 +146,9 @@ mod tests {
 
     #[test]
     fn a_clients_keys_are_its_own_and_its_labelled_ones() {
-        let names =
-            all(&["grok.key.work", "grok.key", "grok.key.Bad", "grok.key.default", "grok.other", "grok.key.b-2"]);
-        assert_eq!(labels("grok", &names), ["default", "b-2", "work"]);
-        assert_eq!(labels("grok", &all(&["grok.key.work"])), ["work"]);
-        assert!(labels("zcode", &names).is_empty());
+        assert_eq!(labels(&all(&["work", "", "Bad", "default", "a.b", "b-2", "work"])), ["default", "b-2", "work"]);
+        assert_eq!(labels(&all(&["work"])), ["work"]);
+        assert!(labels(&[]).is_empty());
     }
 
     #[test]

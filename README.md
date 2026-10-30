@@ -88,16 +88,17 @@ They show in `pointman health` as `codex.<label>`.
 
 Grok and ZCode run on an API key, sealed in the vault for the machines that run them: `grok.key` (or
 `zcode.key`) from `/grok add`, shown as `default`. Add more beside it as `<client>.key.<name>`, from the
-app's `/secrets add grok.key.work`. A name is lowercase letters, digits and `-`, up to 32. Rota lists
-these names and never opens them. Before each run it tells the node which key to use (`key_label`, node
-0.4.5), and the node opens that one for the run. If this machine has no seal of it, the run fails.
+app's `/secrets add grok.key.work`. A name is lowercase letters, digits and `-`, up to 32. Rota can't open
+these keys: before each run the node tells it which ones this machine holds (`key_labels`), rota tells the
+node which to use (`key_label`, node 0.4.5), and the node opens that one for the run. If this machine has no
+seal of it, the run fails.
 
 Neither client says how much of a key is used, so runs stay on one key until a run on it ends at a limit.
 Rota tells that from the run's error: Grok's own limit words, or a usage or spend limit as the node words
 it. That key then sits out an hour (`key_rest_minutes`), and runs move to the next key in order. If every
 key is sitting out, runs go to the one back soonest. A run that ends well on a key clears it. With one key,
-runs go as they did without rota. `/rota usage` and the pane list each client's keys, which one runs use,
-and which are sitting out, under `Grok keys` and `ZCode keys`.
+runs go as they did without rota. `/rota usage` and the pane list each client's keys as its last run here
+heard them, which one runs use, and which are sitting out, under `Grok keys` and `ZCode keys`.
 
 ## Commands
 

@@ -13,9 +13,9 @@ command = ["bin/rota", "serve"]
 
 [permissions]
 network = true
-secrets = ["rota.*", "grok.*", "zcode.*"]   # each account's token, kept in the vault as rota.<label>; and the names
-                                            # of Grok's and ZCode's keys (grok.key, grok.key.<label>), never opened:
-                                            # the node opens the one rota names for a run
+secrets = ["rota.*"]             # each account's token, kept in the vault as rota.<label>. Grok's and ZCode's keys
+                                 # aren't rota's to open: the node lists them by label with each run (key_labels),
+                                 # and opens the one rota names
 
 # the node asks rota which account each Claude Code or Codex run starts on, and which key each Grok or ZCode
 # run uses (EXT-113), and tells it how the run ended
