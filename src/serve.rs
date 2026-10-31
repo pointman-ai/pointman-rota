@@ -1,6 +1,7 @@
 //! `rota serve`: the extension its node runs. The node asks it which account each Claude Code or Codex
-//! run starts on (`session.prepare`), tells it how each run ended (`session.ended`), and shows its
-//! accounts as parts in `pointman health`; people and agents steer it with its commands.
+//! run starts on, and which key each Grok or ZCode run uses (`session.prepare`), tells it how each run ended
+//! (`session.ended`), and shows its accounts as parts in `pointman health`; people and agents steer it with
+//! its commands.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
@@ -25,7 +26,7 @@ use serde_json::{json, Value};
 use crate::accounts::{self, Seen, DEFAULT};
 use crate::signin::SignIns;
 use crate::util::{self, now, or_default, text, truthy};
-use crate::{codex, probe};
+use crate::{codex, keys, probe};
 
 /// The last swaps, for the machine's status.
 const MOVES_KEPT: usize = 10;
@@ -79,6 +80,9 @@ struct State {
     /// so vault items, health ids and the runs' accounts don't change.
     #[serde(default, deserialize_with = "or_default", skip_serializing_if = "BTreeMap::is_empty")]
     names: BTreeMap<String, String>,
+    /// Each Grok or ZCode client's keys: which one runs start on, and those sitting out after a limit (EXT-113).
+    #[serde(default, deserialize_with = "or_default", skip_serializing_if = "BTreeMap::is_empty")]
+    keys: BTreeMap<String, keys::Keys>,
 }
 
 impl State {
@@ -393,6 +397,33 @@ impl Rota {
         60.0 * self.setting("cooldown_minutes").unwrap_or(10.0)
     }
 
+    /// Seconds a Grok or ZCode key a run ended at a limit on sits out (EXT-113): neither says when it resets.
+    fn key_rest(&self) -> f64 {
+        60.0 * self.setting("key_rest_minutes").unwrap_or(60.0)
+    }
+
+    /// Each Grok or ZCode client with a key here, as its last run heard them: its keys, which one runs start on,
+    /// and each one's line.
+    fn keys_summary(st: &State, now: f64) -> Value {
+        let mut out = serde_json::Map::new();
+        for (client, name) in keys::CLIENTS {
+            let Some(kept) = st.keys.get(client).filter(|k| !k.labels.is_empty()) else { continue };
+            let rows: Vec<Value> = kept
+                .labels
+                .iter()
+                .map(|label| {
+                    let until = kept.limited.get(label).map(|l| l.until).filter(|u| now < *u);
+                    json!({"label": label, "id": format!("{client}.{label}"), "line": keys::describe(label, kept, now),
+                           "limited_until": until.map(|u| u as i64),
+                           "said": kept.limited.get(label).filter(|_| until.is_some()).map(|l| &l.said)})
+                })
+                .collect();
+            let current = kept.current.as_ref().filter(|c| kept.labels.contains(*c));
+            out.insert(client.to_string(), json!({"name": name, "current": current, "keys": rows}));
+        }
+        Value::Object(out)
+    }
+
     /// A swap: kept for the machine's status (Machines, `pointman health`, rota.status) and logged.
     fn moved(&self, st: &mut State, was: Option<String>, to: &str, why: String) {
         let now = now();
@@ -477,7 +508,7 @@ impl Rota {
             .collect();
         json!({"current": current.map(|c| st.shown(c)), "threshold": self.threshold(), "folders": named(&st.folders),
                "agents": named(&st.agents), "moves": moves, "accounts": rows,
-               "codex": {"current": cx.current, "accounts": codex_rows}})
+               "codex": {"current": cx.current, "accounts": codex_rows}, "keys": Rota::keys_summary(&st, now)})
     }
 
     /// What changed goes to the apps: the event (only when it did), and each open accounts pane, whose
@@ -603,6 +634,7 @@ impl Rota {
         match p.client.as_str() {
             "codex" => return Ok(self.prepare_codex()),
             "claude" => {}
+            client if keys::takes(client) => return Ok(self.prepare_key(client, &p.key_labels)),
             _ => return Ok(SessionPrepareResponse::default()),
         }
         let toks = self.all_tokens();
@@ -651,6 +683,61 @@ impl Rota {
         Ok(run_on(&label, token_of(&toks, &label).unwrap_or(&None)))
     }
 
+    /// A Grok or ZCode run's key (EXT-113), of those the node says this machine holds (`key_labels`): its label for
+    /// the node, which opens `<client>.key.<label>` for the run, or none for the client's own key. With no key here
+    /// at all, nothing: the run goes as it would without rota.
+    fn prepare_key(&self, client: &str, offered: &[String]) -> SessionPrepareResponse {
+        let labels = keys::labels(offered);
+        let (label, changed) = {
+            let mut st = self.state();
+            let kept = st.keys.entry(client.to_string()).or_default();
+            // kept for `/rota usage` and the pane, which only hear of the keys with a run
+            let mut changed = kept.labels != labels;
+            kept.labels = labels;
+            let label = keys::choose(&kept.labels, kept, now());
+            if let Some(to) = label.as_ref().filter(|l| kept.current.as_ref() != Some(*l)) {
+                let was = kept.current.replace(to.clone());
+                let name = keys::name(client);
+                self.h.log(format!("{name} runs use its {to} key now (was {})", was.as_deref().unwrap_or("None")));
+                changed = true;
+            }
+            if changed {
+                self.save_state(&st);
+            }
+            (label, changed)
+        };
+        if changed {
+            self.tell();
+        }
+        let Some(label) = label else { return SessionPrepareResponse::default() };
+        let key_label = (label != DEFAULT).then(|| label.clone());
+        SessionPrepareResponse { account: Some(label), key_label, ..Default::default() }
+    }
+
+    /// How a Grok or ZCode run on one of its keys ended: at a limit, the key sits out and the next run moves on;
+    /// done, it's ready again.
+    fn ended_key(&self, p: &SessionEndedRequest) {
+        use pointman_extension::protocol::session_ended_request::Status;
+        let label = p.account.clone().filter(|l| !l.is_empty()).unwrap_or_else(|| DEFAULT.into());
+        let error = p.error.as_deref().unwrap_or_default();
+        let status = p.status.as_known();
+        let limited = matches!(status, Some(Status::STATUS_FAILED | Status::STATUS_LIMITED)) && keys::said_limit(error);
+        {
+            let mut st = self.state();
+            let kept = st.keys.entry(p.client.clone()).or_default();
+            if limited {
+                kept.hit_limit(&label, error, self.key_rest(), now());
+                self.h.log(format!("{}'s {label} key hit a limit: {error}", keys::name(&p.client)));
+            } else if status == Some(Status::STATUS_DONE) {
+                kept.worked(&label);
+            } else {
+                return;
+            }
+            self.save_state(&st);
+        }
+        self.tell();
+    }
+
     /// A Codex run's account: its own Codex home (CODEX_HOME), or nothing for the machine's own login.
     fn prepare_codex(&self) -> SessionPrepareResponse {
         let mut labels = codex::labels(&accounts::load_store(None));
@@ -678,6 +765,10 @@ impl Rota {
     /// A run's account as Claude Code last reported it, and whether its token was refused. A Codex run's
     /// from the newest session Codex wrote in that account's home.
     fn ended(&self, p: &SessionEndedRequest) -> anyhow::Result<SessionEndedResponse> {
+        if keys::takes(&p.client) {
+            self.ended_key(p);
+            return Ok(SessionEndedResponse::default());
+        }
         let label = p.account.clone().filter(|l| !l.is_empty()).unwrap_or_else(|| DEFAULT.into());
         let error = p.error.clone();
         if p.client == "codex" {

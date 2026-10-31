@@ -437,6 +437,71 @@ fn codex_usage_in_rota_usage() {
     assert_eq!(why(&parts, "codex.default"), line);
 }
 
+/// EXT-113: Grok's runs take its keys in turns, moving on after a run on one hits a limit (the node lists the keys
+/// this machine holds, `key_labels`, and opens the one rota names, `key_label`); ZCode with one key goes as it did,
+/// and a client with no key here gets nothing from rota.
+#[test]
+fn grok_and_zcode_keys() {
+    let host = Host::start();
+    // as the node lists them: Grok's own key (""), a labelled one, and a name that isn't a label; ZCode's own only
+    let offered = |client: &str| if client == "grok" { json!(["", "work", "Not-A-Label"]) } else { json!([""]) };
+    let prepare = |client: &str| {
+        host.call("session.prepare", json!({"run": {"id": "run_1"}, "client": client, "keyLabels": offered(client)}))
+    };
+    // before a Grok run, rota hasn't heard of its keys
+    assert!(host.run("rota.usage", json!({}))["keys"].get("grok").is_none());
+    let ended = |client: &str, account: &str, status: &str, error: &str| {
+        host.call(
+            "session.ended",
+            json!({"run": {"id": "run_1"}, "client": client, "account": account,
+                   "status": format!("STATUS_{}", status.to_uppercase()), "error": error}),
+        );
+    };
+    // the client's own key first: no label, so the node opens grok.key as without rota
+    assert_eq!(prepare("grok"), json!({"account": "default"}));
+    // a failure that isn't a limit changes nothing
+    ended("grok", "default", "failed", "the session ended without a result");
+    assert_eq!(prepare("grok"), json!({"account": "default"}));
+    // a limit: the next run moves to work, and the node opens grok.key.work for it
+    ended("grok", "default", "failed", "429 Too Many Requests: rate limit exceeded for this API key");
+    assert_eq!(prepare("grok"), json!({"account": "work", "keyLabel": "work"}));
+    assert_eq!(prepare("grok"), json!({"account": "work", "keyLabel": "work"}), "it stays there");
+    let usage = host.run("rota.usage", json!({}));
+    let grok = &usage["keys"]["grok"];
+    assert_eq!(grok["current"], "work");
+    let lines: Vec<(&str, &str)> = grok["keys"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|k| (k["label"].as_str().unwrap(), k["line"].as_str().unwrap()))
+        .collect();
+    assert_eq!(lines.len(), 2, "a name that isn't a label isn't a key: {lines:?}");
+    assert!(lines[0].0 == "default" && lines[0].1.starts_with("sat out after a limit · back at "), "{lines:?}");
+    assert_eq!(lines[1], ("work", "runs start here"));
+    assert!(grok["keys"][0]["said"].as_str().unwrap().contains("rate limit"));
+    let text = usage["text"].as_str().unwrap();
+    assert!(
+        text.contains("**Grok keys** · another key: `/secrets add grok.key.<name>`\n- **default** · sat out"),
+        "{text}"
+    );
+    // work at its limit too: nowhere else to go, so the one back soonest
+    ended("grok", "work", "failed", "Usage limit reached for 5 hour");
+    assert_eq!(prepare("grok"), json!({"account": "default"}));
+    // a run on it that ends well: it's ready again
+    ended("grok", "default", "done", "");
+    let grok = &host.run("rota.status", json!({}))["keys"]["grok"];
+    assert_eq!(grok["keys"][0]["line"], "runs start here");
+    // ZCode has its own key only: every run goes there, a limit or not
+    assert_eq!(prepare("zcode"), json!({"account": "default"}));
+    ended("zcode", "default", "failed", "Insufficient balance or no resource package");
+    assert_eq!(prepare("zcode"), json!({"account": "default"}));
+    // no keys at all, or a client rota doesn't take: nothing
+    let none = host.call("session.prepare", json!({"run": {"id": "run_1"}, "client": "zcode", "keyLabels": []}));
+    assert_eq!(none, json!({}));
+    assert!(host.run("rota.usage", json!({}))["keys"].get("zcode").is_none(), "its keys are gone: so is its list");
+    assert_eq!(prepare("opencode"), json!({}));
+}
+
 /// A Codex session as Codex writes it, with the account's windows in its rate_limits.
 fn rollout(home: &Path, used: f64, window: u64) {
     let day = home.join("sessions/2026/10/05");

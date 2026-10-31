@@ -17,6 +17,23 @@ fn codex_accounts(summary: &Value) -> Vec<Value> {
     summary["codex"]["accounts"].as_array().cloned().unwrap_or_default()
 }
 
+/// A summary's Grok and ZCode clients with keys here (EXT-113), in rota's order: (client, its name, its keys).
+fn keyed(summary: &Value) -> Vec<(String, String, Vec<Value>)> {
+    let Some(all) = summary["keys"].as_object() else { return vec![] };
+    all.iter()
+        .map(|(client, c)| {
+            let name = c["name"].as_str().unwrap_or(client).to_string();
+            (client.clone(), name, c["keys"].as_array().cloned().unwrap_or_default())
+        })
+        .filter(|(_, _, keys)| !keys.is_empty())
+        .collect()
+}
+
+/// Where another key for a client goes: the vault's own form, as `<client>.key.<label>`.
+fn add_key(client: &str) -> String {
+    format!("another key: `/secrets add {client}.key.<name>`")
+}
+
 /// Each account's windows as chart rows: [account, window, fraction used].
 fn rows<'a>(accounts: &'a [Value], name: impl Fn(&Value) -> Value + 'a) -> impl Iterator<Item = Value> + 'a {
     accounts.iter().flat_map(move |a| {
@@ -32,9 +49,10 @@ fn rows<'a>(accounts: &'a [Value], name: impl Fn(&Value) -> Value + 'a) -> impl 
 pub fn view(summary: &Value, message: Option<&str>) -> (String, Value) {
     let accounts = summary["accounts"].as_array().cloned().unwrap_or_default();
     let codex = codex_accounts(summary);
+    let keyed = keyed(summary);
     let current = summary["current"].as_str();
     let mut lines: Vec<String> = message.filter(|m| !m.is_empty()).map(|m| format!("{m}\n")).into_iter().collect();
-    if !codex.is_empty() {
+    if !codex.is_empty() || !keyed.is_empty() {
         lines.push("**Claude**".into());
     }
     for a in &accounts {
@@ -47,6 +65,12 @@ pub fn view(summary: &Value, message: Option<&str>) -> (String, Value) {
         lines.push("\n**Codex**".into());
         for a in &codex {
             lines.push(format!("- **{}** · {}", a["label"].as_str().unwrap_or("?"), a["line"].as_str().unwrap_or("")));
+        }
+    }
+    for (client, name, keys) in &keyed {
+        lines.push(format!("\n**{name} keys** · {}", add_key(client)));
+        for k in keys {
+            lines.push(format!("- **{}** · {}", k["label"].as_str().unwrap_or("?"), k["line"].as_str().unwrap_or("")));
         }
     }
     let text = lines.join("\n");
@@ -168,6 +192,16 @@ pub fn pane(summary: &Value, now: f64) -> Vec<Block> {
     if !codex.is_empty() {
         blocks.push(heading("codex", 2, "Codex accounts", Some("As Codex's /status shows them")));
         blocks.extend(codex.iter().map(|a| account_block(a, threshold, now)));
+    }
+    // Grok's and ZCode's keys: no usage to show, only which one runs use and which sit out after a limit
+    for (client, name, keys) in keyed(summary) {
+        let how = add_key(&client);
+        blocks.push(heading(&format!("keys:{client}"), 2, &format!("{name} keys"), Some(&how)));
+        for k in keys {
+            let id = k["id"].as_str().unwrap_or_default();
+            let (label, line) = (k["label"].as_str().unwrap_or("?"), k["line"].as_str().unwrap_or_default());
+            blocks.push(heading(&format!("key:{id}"), 3, label, Some(line)));
+        }
     }
     blocks
 }
@@ -311,6 +345,34 @@ mod tests {
         // and none of it on a machine without Codex
         let (text, _) = view(&summary(), None);
         assert!(!text.contains("Codex") && !text.contains("**Claude**"));
+    }
+
+    /// EXT-113: Grok's and ZCode's keys after the accounts, each with its line, and how to add another.
+    #[test]
+    fn keys_come_after_the_accounts() {
+        let mut s = summary();
+        s["keys"] = json!({
+            "grok": {"name": "Grok", "current": "work", "keys": [
+                {"label": "default", "id": "grok.default", "line": "sat out after a limit · back at 15:05"},
+                {"label": "work", "id": "grok.work", "line": "runs start here"}]},
+            "zcode": {"name": "ZCode", "current": null, "keys": []}});
+        let (text, _) = view(&s, None);
+        assert!(text.starts_with("**Claude**\n- **work** · "), "{text}");
+        assert!(
+            text.ends_with(
+                "\n\n**Grok keys** · another key: `/secrets add grok.key.<name>`\n- **default** · sat out after a limit · \
+                 back at 15:05\n- **work** · runs start here"
+            ),
+            "{text}"
+        );
+        assert!(!text.contains("ZCode"), "a client with no key here isn't listed");
+        let pane = as_json(pane(&s, 1000.0));
+        let pane = pane.as_array().unwrap();
+        let at = pane.iter().position(|b| b["name"] == "keys:grok").unwrap();
+        assert_eq!(pane[at]["text"]["markdown"], "Grok keys");
+        assert_eq!(pane[at + 1]["name"], "key:grok.default");
+        assert_eq!(subtitle(&pane[at + 2]), "runs start here");
+        assert_eq!(pane.len(), at + 3);
     }
 
     #[test]

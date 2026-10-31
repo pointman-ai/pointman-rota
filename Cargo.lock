@@ -289,8 +289,8 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
 name = "pointman-extension"
-version = "0.5.0"
-source = "git+https://github.com/pointman-ai/pointman-extension?tag=v0.5.0#91829c5b75f0336ad6f40ad43427204649a58787"
+version = "0.5.1"
+source = "git+https://github.com/pointman-ai/pointman-extension?tag=v0.5.1#1f68da7b24e3e103c318792cfa797930c151b27d"
 dependencies = [
  "anyhow",
  "buffa",
@@ -382,7 +382,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "rota"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "libc",
