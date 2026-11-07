@@ -16,7 +16,10 @@ use serde_json::Value;
 
 use crate::util;
 
-const AUTH: [&str; 6] = ["oauth token", "401", "authentication", "invalid api key", "not logged in", "login"];
+const AUTH: [&str; 7] =
+    ["oauth token", "401", "authenticat", "invalid api key", "not logged in", "login", "could not be refreshed"];
+/// What Claude Code says when a sign-in it has can't be renewed: there is a login, it needs signing in again.
+const EXPIRED: [&str; 3] = ["session expired", "could not be refreshed", "token has expired"];
 /// What a run's environment loses, so it signs in only as the account it's given.
 pub const UNSET: [&str; 3] = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"];
 
@@ -38,6 +41,13 @@ pub fn find_claude() -> Option<PathBuf> {
 pub fn refused(text: Option<&str>) -> bool {
     let low = text.unwrap_or("").to_lowercase();
     AUTH.iter().any(|word| low.contains(word))
+}
+
+/// Whether an error says a sign-in that's there has expired and can't be renewed ("Failed to authenticate:
+/// OAuth session expired and could not be refreshed"), as opposed to no sign-in at all.
+pub fn expired(text: Option<&str>) -> bool {
+    let low = text.unwrap_or("").to_lowercase();
+    EXPIRED.iter().any(|word| low.contains(word))
 }
 
 /// The account's last rate_limit_info, or why there's none, and its usage when Claude Code gave it.

@@ -34,13 +34,18 @@ if [ "$1" = "setup-token" ]; then
   else printf '\nOAuth error: Invalid code\n'; fi
   exit 0
 fi
-# `claude auth status`: the machine's own login, none while the file FAKE_NO_LOGIN names is there
+# `claude auth status`: the machine's own login, none while the file FAKE_NO_LOGIN names is there (nor, the
+# harder case for rota, while FAKE_EXPIRED's is: whether Claude Code counts an expired sign-in isn't known)
 if [ "$1" = "auth" ]; then
-  if [ -e "$FAKE_NO_LOGIN" ]; then echo '{"loggedIn": false, "authMethod": "none"}'; exit 1; fi
+  if [ -e "$FAKE_NO_LOGIN" ] || [ -e "$FAKE_EXPIRED" ]; then echo '{"loggedIn": false, "authMethod": "none"}'; exit 1; fi
   echo '{"loggedIn": true, "authMethod": "claude.ai"}'; exit 0
 fi
 if [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ] && [ -e "$FAKE_NO_LOGIN" ]; then
   echo '{"type":"result","is_error":true,"result":"Not logged in · Please run /login"}'; exit 1
+fi
+# the machine's own login, its OAuth sign-in expired (nixos, 2 and 7 Nov: EXT-118)
+if [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ] && [ -e "$FAKE_EXPIRED" ]; then
+  echo '{"type":"result","is_error":true,"result":"Failed to authenticate: OAuth session expired and could not be refreshed"}'; exit 1
 fi
 # its usage (`get_usage`), as on 8 Oct: the machine's own login with credits off, work's 40% of its monthly
 # limit, and none for spare (a setup token's, maybe)
@@ -102,6 +107,7 @@ impl Host {
             .env("ROTA_STORE", &store)
             .env("FAKE_CALLS", at("calls"))
             .env("FAKE_NO_LOGIN", at("no-login"))
+            .env("FAKE_EXPIRED", at("expired"))
             .env("CODEX_HOME", at("codex-own"))
             .env("ROTA_CODEX_HOMES", at("codex-homes"))
             .node("studio")
@@ -296,6 +302,42 @@ fn a_machine_with_no_claude_login_of_its_own() {
     assert_eq!((&got["default"]["state"], &got["default"]["needs"]), (&json!("STATE_OK"), &Value::Null));
     assert!(rows(&host.status())["default"].get("no_login").is_none());
     assert_eq!(host.run("rota.swap", json!({"to": "default"}))["current"], "default");
+}
+
+const EXPIRED: &str = "Failed to authenticate: OAuth session expired and could not be refreshed";
+
+/// The machine's own login whose OAuth sign-in has expired (nixos, 7 Nov: EXT-118): it asks to be signed in
+/// again, and no run starts on it, though its last windows say it has the most room.
+#[test]
+fn the_machines_own_login_expired() {
+    let host = Host::start();
+    host.parts(claude_checked);
+    // its last windows, from before it expired, say it's nearly empty
+    host.ended("default", "done", Value::Null, five_hour(0.02));
+    fs::write(host.path("expired"), "").unwrap();
+    host.ended("default", "failed", json!(EXPIRED), Value::Null);
+    let row = &rows(&host.status())["default"];
+    assert_eq!((&row["needs_auth"], row.get("no_login")), (&json!(true), None), "{row}");
+    let got = host.parts(|got| got["default"]["needs"] == json!(["ACTION_AUTH"]));
+    assert_eq!(
+        (&got["default"]["state"], &got["default"]["needs"]),
+        (&json!("STATE_FAILING"), &json!(["ACTION_AUTH"]))
+    );
+    // work fills up: runs move to spare, not to the login with the most room that can't start one
+    host.ended("work", "done", Value::Null, five_hour(0.97));
+    assert_eq!(host.account(json!({"run": {"id": "run_1"}, "client": "claude"})), "spare");
+    assert!(host.refuses("rota.swap", json!({"to": "default"})).contains("token was refused"));
+    let fixed = host.call("health.fix", json!({"part": "default", "action": "ACTION_AUTH"}));
+    assert_eq!(fixed["message"], "On studio: run `claude auth login` and sign Claude Code in again");
+
+    // and rota's own check finds it, on a machine that starts with it expired
+    let host = Host::with_state(|state| fs::write(state.parent().unwrap().join("expired"), "").unwrap());
+    let got = host.parts(|got| got["default"]["needs"] == json!(["ACTION_AUTH"]));
+    assert_eq!(
+        (&got["default"]["state"], &got["default"]["needs"]),
+        (&json!("STATE_FAILING"), &json!(["ACTION_AUTH"]))
+    );
+    assert_eq!(rows(&host.status())["default"]["needs_auth"], json!(true));
 }
 
 #[test]

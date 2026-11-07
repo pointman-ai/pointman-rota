@@ -1,7 +1,7 @@
 [extension]
 id = "rota"
 name = "Rota"
-version = "0.17.0"
+version = "0.17.1"
 publisher = "aurelio"
 summary = "Claude accounts taken in turns: each run starts on the account with the most room left. Grok and ZCode keys too, moving on after a limit."
 node = ">=0.4.5"                 # session.prepare's key_label (EXT-113)

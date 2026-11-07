@@ -598,8 +598,12 @@ impl Rota {
     }
 
     fn note(&self, label: &str, limits: Option<&Value>, error: Option<String>, refused: bool) {
-        // the machine's own login refused: is there one at all? (EXT-44: a Mac signed in through rota only)
-        let no_login = refused && label == DEFAULT && probe::signed_in(None, Duration::from_secs(20)) == Some(false);
+        // the machine's own login refused: is there one at all? (EXT-44: a Mac signed in through rota only) One
+        // whose session expired is there, and needs signing in again, whatever `claude auth status` says (EXT-118)
+        let no_login = refused
+            && label == DEFAULT
+            && !probe::expired(error.as_deref())
+            && probe::signed_in(None, Duration::from_secs(20)) == Some(false);
         {
             let mut st = self.state();
             let seen = st.seen.entry(label.to_string()).or_default();
@@ -827,8 +831,11 @@ impl Rota {
         let auth = p.action == health::Action::ACTION_AUTH;
         let message = if let Some(cx) = label.strip_prefix("codex.").filter(|_| auth) {
             format!("On {}: run `{} codex add {cx}` and sign in again", self.machine(), this_program())
-        } else if !auth || label == DEFAULT {
-            bail!("rota can only say how to sign an added account in again");
+        } else if !auth {
+            bail!("rota can only say how to sign an account in again");
+        } else if label == DEFAULT {
+            // the machine's own login, its sign-in expired (EXT-118): Claude Code signs in again there, not rota
+            format!("On {}: run `claude auth login` and sign Claude Code in again", self.machine())
         } else {
             format!(
                 "On {}: run `claude setup-token` signed in as {label}'s account, then `{} add {label}` and paste the \

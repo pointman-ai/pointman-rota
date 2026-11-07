@@ -172,6 +172,16 @@ fn describe() {
     assert!(none.refused() && !none.needs_sign_in() && refused(Seen::default()).needs_sign_in());
 }
 
+/// Claude Code's words for a sign-in that can't start a run, and which of them mean one that expired (EXT-118).
+#[test]
+fn a_refused_or_expired_sign_in() {
+    let expired = "Failed to authenticate: OAuth session expired and could not be refreshed";
+    assert!(rota::probe::refused(Some(expired)) && rota::probe::expired(Some(expired)));
+    let none = "Not logged in · Please run /login";
+    assert!(rota::probe::refused(Some(none)) && !rota::probe::expired(Some(none)));
+    assert!(!rota::probe::refused(Some("You've hit your session limit · resets 3pm")));
+}
+
 #[test]
 fn the_manifest_and_the_crate_have_one_version() {
     let manifest = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("extension.toml")).unwrap();
