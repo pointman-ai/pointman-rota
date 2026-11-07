@@ -180,6 +180,9 @@ fn a_refused_or_expired_sign_in() {
     let none = "Not logged in · Please run /login";
     assert!(rota::probe::refused(Some(none)) && !rota::probe::expired(Some(none)));
     assert!(!rota::probe::refused(Some("You've hit your session limit · resets 3pm")));
+    // other sign-ins failing say nothing about the account's own token
+    let mcp = "Could not authenticate to MCP server: connection timed out";
+    assert!(!rota::probe::refused(Some(mcp)) && !rota::probe::expired(Some(mcp)));
 }
 
 #[test]

@@ -16,8 +16,18 @@ use serde_json::Value;
 
 use crate::util;
 
-const AUTH: [&str; 7] =
-    ["oauth token", "401", "authenticat", "invalid api key", "not logged in", "login", "could not be refreshed"];
+/// Words in an error that mean the account's token was refused. Only Claude Code's own sign-in wording: a stem
+/// such as "authenticat" would also catch errors about other things ("Could not authenticate to MCP server").
+const AUTH: [&str; 8] = [
+    "oauth token",
+    "401",
+    "authentication",
+    "invalid api key",
+    "not logged in",
+    "login",
+    "oauth session expired",
+    "could not be refreshed",
+];
 /// What Claude Code says when a sign-in it has can't be renewed: there is a login, it needs signing in again.
 const EXPIRED: [&str; 3] = ["session expired", "could not be refreshed", "token has expired"];
 /// What a run's environment loses, so it signs in only as the account it's given.
