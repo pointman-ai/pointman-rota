@@ -17,21 +17,21 @@ fn codex_accounts(summary: &Value) -> Vec<Value> {
     summary["codex"]["accounts"].as_array().cloned().unwrap_or_default()
 }
 
-/// A summary's Grok and ZCode clients with keys here (EXT-113), in rota's order: (client, its name, its keys).
+/// A summary's Grok and ZCode harnesses with keys here (EXT-113), in rota's order: (harness, its name, its keys).
 fn keyed(summary: &Value) -> Vec<(String, String, Vec<Value>)> {
     let Some(all) = summary["keys"].as_object() else { return vec![] };
     all.iter()
-        .map(|(client, c)| {
-            let name = c["name"].as_str().unwrap_or(client).to_string();
-            (client.clone(), name, c["keys"].as_array().cloned().unwrap_or_default())
+        .map(|(harness, c)| {
+            let name = c["name"].as_str().unwrap_or(harness).to_string();
+            (harness.clone(), name, c["keys"].as_array().cloned().unwrap_or_default())
         })
         .filter(|(_, _, keys)| !keys.is_empty())
         .collect()
 }
 
-/// Where another key for a client goes: the vault's own form, as `<client>.key.<label>`.
-fn add_key(client: &str) -> String {
-    format!("another key: `/secrets add {client}.key.<name>`")
+/// Where another key for a harness goes: the vault's own form, as `<harness>.key.<label>`.
+fn add_key(harness: &str) -> String {
+    format!("another key: `/secrets add {harness}.key.<name>`")
 }
 
 /// Each account's windows as chart rows: [account, window, fraction used].
@@ -67,8 +67,8 @@ pub fn view(summary: &Value, message: Option<&str>) -> (String, Value) {
             lines.push(format!("- **{}** · {}", a["label"].as_str().unwrap_or("?"), a["line"].as_str().unwrap_or("")));
         }
     }
-    for (client, name, keys) in &keyed {
-        lines.push(format!("\n**{name} keys** · {}", add_key(client)));
+    for (harness, name, keys) in &keyed {
+        lines.push(format!("\n**{name} keys** · {}", add_key(harness)));
         for k in keys {
             lines.push(format!("- **{}** · {}", k["label"].as_str().unwrap_or("?"), k["line"].as_str().unwrap_or("")));
         }
@@ -194,9 +194,9 @@ pub fn pane(summary: &Value, now: f64) -> Vec<Block> {
         blocks.extend(codex.iter().map(|a| account_block(a, threshold, now)));
     }
     // Grok's and ZCode's keys: no usage to show, only which one runs use and which sit out after a limit
-    for (client, name, keys) in keyed(summary) {
-        let how = add_key(&client);
-        blocks.push(heading(&format!("keys:{client}"), 2, &format!("{name} keys"), Some(&how)));
+    for (harness, name, keys) in keyed(summary) {
+        let how = add_key(&harness);
+        blocks.push(heading(&format!("keys:{harness}"), 2, &format!("{name} keys"), Some(&how)));
         for k in keys {
             let id = k["id"].as_str().unwrap_or_default();
             let (label, line) = (k["label"].as_str().unwrap_or("?"), k["line"].as_str().unwrap_or_default());
@@ -365,7 +365,7 @@ mod tests {
             ),
             "{text}"
         );
-        assert!(!text.contains("ZCode"), "a client with no key here isn't listed");
+        assert!(!text.contains("ZCode"), "a harness with no key here isn't listed");
         let pane = as_json(pane(&s, 1000.0));
         let pane = pane.as_array().unwrap();
         let at = pane.iter().position(|b| b["name"] == "keys:grok").unwrap();

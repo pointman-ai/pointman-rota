@@ -1,10 +1,10 @@
 [extension]
 id = "rota"
 name = "Rota"
-version = "0.17.1"
+version = "0.18.0"
 publisher = "aurelio"
 summary = "Claude accounts taken in turns: each run starts on the account with the most room left. Grok and ZCode keys too, moving on after a limit."
-node = ">=0.4.5"                 # session.prepare's key_label (EXT-113)
+node = ">=0.6,<1"
 platforms = ["macos-arm64", "macos-x86_64", "linux-x86_64", "linux-arm64"]
 
 [run]
@@ -20,7 +20,7 @@ secrets = ["rota.*"]             # each account's token, kept in the vault as ro
 # the node asks rota which account each Claude Code or Codex run starts on, and which key each Grok or ZCode
 # run uses (EXT-113), and tells it how the run ended
 [sessions]
-clients = ["claude", "codex", "grok", "zcode"]
+harnesses = ["claude", "codex", "grok", "zcode"]
 env = ["CLAUDE_CODE_OAUTH_TOKEN", "CODEX_HOME"]
 
 # each account: the apps offer /rota add, and an alert until there's one (MB-154)
