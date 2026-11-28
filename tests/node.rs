@@ -228,16 +228,16 @@ fn rota_on_a_node() {
     assert!(first["spare"].get("credits").is_none());
     // the machine's own login is past 90%, so runs start on work, with its token
     let run =
-        host.call("session.prepare", json!({"run": {"id": "run_1"}, "agent": {"name": "scene"}, "client": "claude"}));
+        host.call("session.prepare", json!({"run": {"id": "run_1"}, "agent": {"name": "scene"}, "harness": "claude"}));
     assert_eq!(run, json!({"env": {"CLAUDE_CODE_OAUTH_TOKEN": work()}, "account": "work"}));
     assert_eq!(
-        host.call("session.prepare", json!({"run": {"id": "run_2"}, "agent": {"name": "scene"}, "client": "gemini"})),
+        host.call("session.prepare", json!({"run": {"id": "run_2"}, "agent": {"name": "scene"}, "harness": "gemini"})),
         json!({})
     );
     // a run's own report moves it on: work fills up, so runs go to the vault's spare, with its token
     host.ended("work", "done", Value::Null, five_hour(0.97));
     assert_eq!(
-        host.call("session.prepare", json!({"run": {"id": "run_3"}, "client": "claude"})),
+        host.call("session.prepare", json!({"run": {"id": "run_3"}, "harness": "claude"})),
         json!({"env": {"CLAUDE_CODE_OAUTH_TOKEN": spare()}, "account": "spare"})
     );
     // and spare full too: nothing else has room, so they stay put
@@ -245,7 +245,7 @@ fn rota_on_a_node() {
     spent["overageStatus"] = json!("rejected");
     spent["overageDisabledReason"] = json!("org_level_disabled_until");
     host.ended("spare", "done", Value::Null, spent);
-    assert_eq!(host.account(json!({"run": {"id": "run_4"}, "client": "claude"})), "spare");
+    assert_eq!(host.account(json!({"run": {"id": "run_4"}, "harness": "claude"})), "spare");
     // its spend limit stays known through a run whose last event doesn't say
     host.ended("spare", "done", Value::Null, five_hour(0.95));
     let status = host.status();
@@ -288,7 +288,7 @@ fn a_machine_with_no_claude_login_of_its_own() {
     );
     // an added account whose token is refused still asks to be signed in again
     assert_eq!((&got["old"]["state"], &got["old"]["needs"]), (&json!("STATE_FAILING"), &json!(["ACTION_AUTH"])));
-    assert_eq!(host.account(json!({"run": {"id": "run_1"}, "client": "claude"})), "work");
+    assert_eq!(host.account(json!({"run": {"id": "run_1"}, "harness": "claude"})), "work");
     // nor does rota's event (the node's Needs-you records read it) say its token was refused
     let row = &rows(&host.status())["default"];
     assert_eq!((&row["needs_auth"], &row["no_login"]), (&json!(false), &json!(true)), "{row}");
@@ -325,7 +325,7 @@ fn the_machines_own_login_expired() {
     );
     // work fills up: runs move to spare, not to the login with the most room that can't start one
     host.ended("work", "done", Value::Null, five_hour(0.97));
-    assert_eq!(host.account(json!({"run": {"id": "run_1"}, "client": "claude"})), "spare");
+    assert_eq!(host.account(json!({"run": {"id": "run_1"}, "harness": "claude"})), "spare");
     assert!(host.refuses("rota.swap", json!({"to": "default"})).contains("token was refused"));
     let fixed = host.call("health.fix", json!({"part": "default", "action": "ACTION_AUTH"}));
     assert_eq!(fixed["message"], "On studio: run `claude auth login` and sign Claude Code in again");
@@ -344,12 +344,12 @@ fn the_machines_own_login_expired() {
 fn swapping_renaming_and_folders() {
     let host = Host::start();
     host.parts(claude_checked);
-    assert_eq!(host.account(json!({"run": {"id": "run_1"}, "client": "claude"})), "work");
+    assert_eq!(host.account(json!({"run": {"id": "run_1"}, "harness": "claude"})), "work");
     // asked to, runs move at once, and stay there as after any move
     let got = host.run("rota.swap", json!({"to": "spare"}));
     assert_eq!(got["current"], "spare");
     assert_eq!(got["message"], "New runs on studio start on spare (was work)");
-    assert_eq!(host.account(json!({"run": {"id": "run_2"}, "client": "claude"})), "spare");
+    assert_eq!(host.account(json!({"run": {"id": "run_2"}, "harness": "claude"})), "spare");
     assert!(host.refuses("rota.swap", json!({"to": "old"})).contains("token was refused"));
     assert!(host.refuses("rota.swap", json!({"to": "gone"})).contains("no account 'gone'"));
     // none named: the one with the most room (work and spare are both at 20%, default at 95%)
@@ -368,7 +368,7 @@ fn swapping_renaming_and_folders() {
     );
     host.run("rota.rename", json!({"from": "spare", "to": "team"}));
     assert_eq!(host.run("rota.swap", json!({"to": "team"}))["current"], "team");
-    assert_eq!(host.account(json!({"run": {"id": "run_3"}, "client": "claude"})), "spare");
+    assert_eq!(host.account(json!({"run": {"id": "run_3"}, "harness": "claude"})), "spare");
     assert_eq!(host.parts(|_| true)["spare"]["name"], "Claude: team");
     assert_eq!(host.run("rota.swap", json!({"to": "spare"}))["current"], "team"); // its label still works
     assert!(host
@@ -397,13 +397,13 @@ fn swapping_renaming_and_folders() {
     host.run("rota.folder", json!({"folder": agent, "account": "spare"}));
     host.run("rota.swap", json!({"to": "work"}));
     assert_eq!(
-        host.call("session.prepare", json!({"run": {"id": "run_4"}, "client": "claude", "folder": agent})),
+        host.call("session.prepare", json!({"run": {"id": "run_4"}, "harness": "claude", "folder": agent})),
         json!({"env": {"CLAUDE_CODE_OAUTH_TOKEN": spare()}, "account": "spare"})
     );
-    assert_eq!(host.account(json!({"run": {"id": "run_5"}, "client": "claude", "folder": "/elsewhere"})), "work");
+    assert_eq!(host.account(json!({"run": {"id": "run_5"}, "harness": "claude", "folder": "/elsewhere"})), "work");
     // ...until it's full: then the rule again
     host.ended("spare", "done", Value::Null, over());
-    assert_eq!(host.account(json!({"run": {"id": "run_6"}, "client": "claude", "folder": agent})), "work");
+    assert_eq!(host.account(json!({"run": {"id": "run_6"}, "harness": "claude", "folder": agent})), "work");
     assert_eq!(host.run("rota.folder", json!({"folder": agent}))["folders"], json!({}));
 }
 
@@ -431,7 +431,7 @@ fn the_accounts_pane_moves_runs_and_keeps_up() {
     // a button moves new runs, and the pane follows in place: edits, never all of it again
     view.input_json(json!({"kind": "tap", "block": "actions", "value": "use:spare"})).unwrap();
     assert_eq!(subtitle("head"), "New runs start on spare · it swaps at 90%");
-    assert_eq!(host.account(json!({"run": {"id": "run_1"}, "client": "claude"})), "spare");
+    assert_eq!(host.account(json!({"run": {"id": "run_1"}, "harness": "claude"})), "spare");
     assert!(view.frames().iter().all(|(method, _)| method == "pane.edit"), "{:?}", view.frames());
     view.input_json(json!({"kind": "tap", "block": "actions", "value": "swap"})).unwrap();
 
@@ -481,25 +481,25 @@ fn codex_usage_in_rota_usage() {
 
 /// EXT-113: Grok's runs take its keys in turns, moving on after a run on one hits a limit (the node lists the keys
 /// this machine holds, `key_labels`, and opens the one rota names, `key_label`); ZCode with one key goes as it did,
-/// and a client with no key here gets nothing from rota.
+/// and a harness with no key here gets nothing from rota.
 #[test]
 fn grok_and_zcode_keys() {
     let host = Host::start();
     // as the node lists them: Grok's own key (""), a labelled one, and a name that isn't a label; ZCode's own only
-    let offered = |client: &str| if client == "grok" { json!(["", "work", "Not-A-Label"]) } else { json!([""]) };
-    let prepare = |client: &str| {
-        host.call("session.prepare", json!({"run": {"id": "run_1"}, "client": client, "keyLabels": offered(client)}))
+    let offered = |harness: &str| if harness == "grok" { json!(["", "work", "Not-A-Label"]) } else { json!([""]) };
+    let prepare = |harness: &str| {
+        host.call("session.prepare", json!({"run": {"id": "run_1"}, "harness": harness, "keyLabels": offered(harness)}))
     };
     // before a Grok run, rota hasn't heard of its keys
     assert!(host.run("rota.usage", json!({}))["keys"].get("grok").is_none());
-    let ended = |client: &str, account: &str, status: &str, error: &str| {
+    let ended = |harness: &str, account: &str, status: &str, error: &str| {
         host.call(
             "session.ended",
-            json!({"run": {"id": "run_1"}, "client": client, "account": account,
+            json!({"run": {"id": "run_1"}, "harness": harness, "account": account,
                    "status": format!("STATUS_{}", status.to_uppercase()), "error": error}),
         );
     };
-    // the client's own key first: no label, so the node opens grok.key as without rota
+    // the harness's own key first: no label, so the node opens grok.key as without rota
     assert_eq!(prepare("grok"), json!({"account": "default"}));
     // a failure that isn't a limit changes nothing
     ended("grok", "default", "failed", "the session ended without a result");
@@ -537,8 +537,8 @@ fn grok_and_zcode_keys() {
     assert_eq!(prepare("zcode"), json!({"account": "default"}));
     ended("zcode", "default", "failed", "Insufficient balance or no resource package");
     assert_eq!(prepare("zcode"), json!({"account": "default"}));
-    // no keys at all, or a client rota doesn't take: nothing
-    let none = host.call("session.prepare", json!({"run": {"id": "run_1"}, "client": "zcode", "keyLabels": []}));
+    // no keys at all, or a harness rota doesn't take: nothing
+    let none = host.call("session.prepare", json!({"run": {"id": "run_1"}, "harness": "zcode", "keyLabels": []}));
     assert_eq!(none, json!({}));
     assert!(host.run("rota.usage", json!({}))["keys"].get("zcode").is_none(), "its keys are gone: so is its list");
     assert_eq!(prepare("opencode"), json!({}));
@@ -571,13 +571,13 @@ fn codex_accounts() {
     fs::write(own.join("auth.json"), "{}").unwrap();
     // the machine's own login only, so far: runs start on it, with nothing set
     assert_eq!(
-        host.call("session.prepare", json!({"run": {"id": "run_1"}, "client": "codex"})),
+        host.call("session.prepare", json!({"run": {"id": "run_1"}, "harness": "codex"})),
         json!({"account": "default"})
     );
     rollout(&own, 95.0, 10080);
     host.call(
         "session.ended",
-        json!({"run": {"id": "run_1"}, "client": "codex", "account": "default", "status": "STATUS_DONE", "error": null,
+        json!({"run": {"id": "run_1"}, "harness": "codex", "account": "default", "status": "STATUS_DONE", "error": null,
                                       "limits": null}),
     );
     // another account, signed in in a home of its own (as `rota codex add` leaves it)
@@ -590,18 +590,18 @@ fn codex_accounts() {
     rollout(&spare, 10.0, 10080);
     host.call(
         "session.ended",
-        json!({"run": {"id": "run_2"}, "client": "codex", "account": "spare", "status": "STATUS_DONE", "error": null,
+        json!({"run": {"id": "run_2"}, "harness": "codex", "account": "spare", "status": "STATUS_DONE", "error": null,
                                       "limits": null}),
     );
     assert_eq!(
-        host.call("session.prepare", json!({"run": {"id": "run_3"}, "client": "codex"})),
+        host.call("session.prepare", json!({"run": {"id": "run_3"}, "harness": "codex"})),
         json!({"env": {"CODEX_HOME": spare}, "account": "spare"})
     );
     let got = host.parts(|g| g.contains_key("codex.spare"));
     assert!(why(&got, "codex.default").starts_with("week 95%"), "{got:?}");
     assert!(why(&got, "codex.spare").ends_with("runs start here"));
     // Claude's accounts are their own: a Codex move doesn't move Claude runs
-    assert_ne!(host.account(json!({"run": {"id": "run_4"}, "client": "claude"})), "spare");
+    assert_ne!(host.account(json!({"run": {"id": "run_4"}, "harness": "claude"})), "spare");
     assert_eq!(host.status()["codex"]["current"], "spare");
 }
 
@@ -611,9 +611,9 @@ fn codex_accounts() {
 fn moves_cooldown_and_agents() {
     let host = Host::start();
     host.parts(claude_checked);
-    assert_eq!(host.account(json!({"run": {"id": "run_1"}, "agent": {"name": "scene"}, "client": "claude"})), "work");
+    assert_eq!(host.account(json!({"run": {"id": "run_1"}, "agent": {"name": "scene"}, "harness": "claude"})), "work");
     host.ended("work", "done", Value::Null, five_hour(0.97));
-    assert_eq!(host.account(json!({"run": {"id": "run_2"}, "agent": {"name": "scene"}, "client": "claude"})), "spare");
+    assert_eq!(host.account(json!({"run": {"id": "run_2"}, "agent": {"name": "scene"}, "harness": "claude"})), "spare");
     let status = host.status();
     let last = status["moves"].as_array().unwrap().last().unwrap().clone();
     assert_eq!((last["from"].clone(), last["to"].clone()), (json!("work"), json!("spare")));
@@ -625,18 +625,18 @@ fn moves_cooldown_and_agents() {
     // spare fills too, and work looks empty again (its window reset): work sits out its cooldown
     host.ended("spare", "done", Value::Null, five_hour(0.95));
     host.ended("work", "done", Value::Null, five_hour(0.10));
-    assert_eq!(host.account(json!({"run": {"id": "run_4"}, "agent": {"name": "rig"}, "client": "claude"})), "spare");
+    assert_eq!(host.account(json!({"run": {"id": "run_4"}, "agent": {"name": "rig"}, "harness": "claude"})), "spare");
 
     // spare runs out altogether: runs leave it at once, cooldown or not, for one that can take them
     // (default, at 95%: work is still cooling down)
     host.ended("spare", "limited", json!("usage limit reached"), over());
-    assert_eq!(host.account(json!({"run": {"id": "run_6"}, "agent": {"name": "rig"}, "client": "claude"})), "default");
+    assert_eq!(host.account(json!({"run": {"id": "run_6"}, "agent": {"name": "rig"}, "harness": "claude"})), "default");
     host.run("rota.swap", json!({"to": "spare"})); // (back, for what follows)
 
     // an agent mapped to an account starts there while it can take runs
     host.run("rota.agent", json!({"agent": "@scene", "account": "work"}));
     assert_eq!(
-        host.call("session.prepare", json!({"run": {"id": "run_7"}, "agent": {"name": "scene"}, "client": "claude"})),
+        host.call("session.prepare", json!({"run": {"id": "run_7"}, "agent": {"name": "scene"}, "harness": "claude"})),
         json!({"env": {"CLAUDE_CODE_OAUTH_TOKEN": work()}, "account": "work"})
     );
 
@@ -647,23 +647,23 @@ fn moves_cooldown_and_agents() {
     assert_eq!(
         host.call(
             "session.prepare",
-            json!({"run": {"id": "run_8"}, "agent": {"name": "search"}, "client": "claude", "connectors": drive})
+            json!({"run": {"id": "run_8"}, "agent": {"name": "search"}, "harness": "claude", "connectors": drive})
         ),
         json!({"account": "default"})
     );
     assert_eq!(
         host.account(
-            json!({"run": {"id": "run_9"}, "agent": {"name": "scene"}, "client": "claude", "connectors": drive})
+            json!({"run": {"id": "run_9"}, "agent": {"name": "scene"}, "harness": "claude", "connectors": drive})
         ),
         "work"
     );
     host.ended("default", "limited", json!("usage limit reached"), over());
     let anywhere = host
-        .account(json!({"run": {"id": "run_10"}, "agent": {"name": "search"}, "client": "claude", "connectors": []}));
+        .account(json!({"run": {"id": "run_10"}, "agent": {"name": "search"}, "harness": "claude", "connectors": []}));
     assert_ne!(anywhere, "default");
     assert_eq!(
         host.account(
-            json!({"run": {"id": "run_11"}, "agent": {"name": "search"}, "client": "claude", "connectors": drive})
+            json!({"run": {"id": "run_11"}, "agent": {"name": "search"}, "harness": "claude", "connectors": drive})
         ),
         anywhere
     );
@@ -682,7 +682,7 @@ fn swapping_one_agent() {
     assert_eq!(got["agents"], json!({"scene": "work"}));
     assert_eq!(got["message"], "@scene's new runs start on work; other runs on studio stay on spare");
     let prepare = |run: &str, handle: &str| {
-        host.account(json!({"run": {"id": run}, "agent": {"name": handle}, "client": "claude"}))
+        host.account(json!({"run": {"id": run}, "agent": {"name": handle}, "harness": "claude"}))
     };
     assert_eq!(prepare("run_1", "scene"), "work");
     assert_eq!(prepare("run_2", "search"), "spare");

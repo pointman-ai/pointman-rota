@@ -80,7 +80,7 @@ struct State {
     /// so vault items, health ids and the runs' accounts don't change.
     #[serde(default, deserialize_with = "or_default", skip_serializing_if = "BTreeMap::is_empty")]
     names: BTreeMap<String, String>,
-    /// Each Grok or ZCode client's keys: which one runs start on, and those sitting out after a limit (EXT-113).
+    /// Each Grok or ZCode harness's keys: which one runs start on, and those sitting out after a limit (EXT-113).
     #[serde(default, deserialize_with = "or_default", skip_serializing_if = "BTreeMap::is_empty")]
     keys: BTreeMap<String, keys::Keys>,
 }
@@ -402,24 +402,24 @@ impl Rota {
         60.0 * self.setting("key_rest_minutes").unwrap_or(60.0)
     }
 
-    /// Each Grok or ZCode client with a key here, as its last run heard them: its keys, which one runs start on,
+    /// Each Grok or ZCode harness with a key here, as its last run heard them: its keys, which one runs start on,
     /// and each one's line.
     fn keys_summary(st: &State, now: f64) -> Value {
         let mut out = serde_json::Map::new();
-        for (client, name) in keys::CLIENTS {
-            let Some(kept) = st.keys.get(client).filter(|k| !k.labels.is_empty()) else { continue };
+        for (harness, name) in keys::HARNESSES {
+            let Some(kept) = st.keys.get(harness).filter(|k| !k.labels.is_empty()) else { continue };
             let rows: Vec<Value> = kept
                 .labels
                 .iter()
                 .map(|label| {
                     let until = kept.limited.get(label).map(|l| l.until).filter(|u| now < *u);
-                    json!({"label": label, "id": format!("{client}.{label}"), "line": keys::describe(label, kept, now),
+                    json!({"label": label, "id": format!("{harness}.{label}"), "line": keys::describe(label, kept, now),
                            "limited_until": until.map(|u| u as i64),
                            "said": kept.limited.get(label).filter(|_| until.is_some()).map(|l| &l.said)})
                 })
                 .collect();
             let current = kept.current.as_ref().filter(|c| kept.labels.contains(*c));
-            out.insert(client.to_string(), json!({"name": name, "current": current, "keys": rows}));
+            out.insert(harness.to_string(), json!({"name": name, "current": current, "keys": rows}));
         }
         Value::Object(out)
     }
@@ -635,10 +635,10 @@ impl Rota {
     /// The account a run starts on: its token goes in the run's environment, and none for this machine's
     /// own login.
     fn prepare(&self, p: &SessionPrepareRequest) -> anyhow::Result<SessionPrepareResponse> {
-        match p.client.as_str() {
+        match p.harness.as_str() {
             "codex" => return Ok(self.prepare_codex()),
             "claude" => {}
-            client if keys::takes(client) => return Ok(self.prepare_key(client, &p.key_labels)),
+            harness if keys::takes(harness) => return Ok(self.prepare_key(harness, &p.key_labels)),
             _ => return Ok(SessionPrepareResponse::default()),
         }
         let toks = self.all_tokens();
@@ -688,20 +688,20 @@ impl Rota {
     }
 
     /// A Grok or ZCode run's key (EXT-113), of those the node says this machine holds (`key_labels`): its label for
-    /// the node, which opens `<client>.key.<label>` for the run, or none for the client's own key. With no key here
+    /// the node, which opens `<harness>.key.<label>` for the run, or none for the harness's own key. With no key here
     /// at all, nothing: the run goes as it would without rota.
-    fn prepare_key(&self, client: &str, offered: &[String]) -> SessionPrepareResponse {
+    fn prepare_key(&self, harness: &str, offered: &[String]) -> SessionPrepareResponse {
         let labels = keys::labels(offered);
         let (label, changed) = {
             let mut st = self.state();
-            let kept = st.keys.entry(client.to_string()).or_default();
+            let kept = st.keys.entry(harness.to_string()).or_default();
             // kept for `/rota usage` and the pane, which only hear of the keys with a run
             let mut changed = kept.labels != labels;
             kept.labels = labels;
             let label = keys::choose(&kept.labels, kept, now());
             if let Some(to) = label.as_ref().filter(|l| kept.current.as_ref() != Some(*l)) {
                 let was = kept.current.replace(to.clone());
-                let name = keys::name(client);
+                let name = keys::name(harness);
                 self.h.log(format!("{name} runs use its {to} key now (was {})", was.as_deref().unwrap_or("None")));
                 changed = true;
             }
@@ -728,10 +728,10 @@ impl Rota {
         let limited = matches!(status, Some(Status::STATUS_FAILED | Status::STATUS_LIMITED)) && keys::said_limit(error);
         {
             let mut st = self.state();
-            let kept = st.keys.entry(p.client.clone()).or_default();
+            let kept = st.keys.entry(p.harness.clone()).or_default();
             if limited {
                 kept.hit_limit(&label, error, self.key_rest(), now());
-                self.h.log(format!("{}'s {label} key hit a limit: {error}", keys::name(&p.client)));
+                self.h.log(format!("{}'s {label} key hit a limit: {error}", keys::name(&p.harness)));
             } else if status == Some(Status::STATUS_DONE) {
                 kept.worked(&label);
             } else {
@@ -769,13 +769,13 @@ impl Rota {
     /// A run's account as Claude Code last reported it, and whether its token was refused. A Codex run's
     /// from the newest session Codex wrote in that account's home.
     fn ended(&self, p: &SessionEndedRequest) -> anyhow::Result<SessionEndedResponse> {
-        if keys::takes(&p.client) {
+        if keys::takes(&p.harness) {
             self.ended_key(p);
             return Ok(SessionEndedResponse::default());
         }
         let label = p.account.clone().filter(|l| !l.is_empty()).unwrap_or_else(|| DEFAULT.into());
         let error = p.error.clone();
-        if p.client == "codex" {
+        if p.harness == "codex" {
             let got = codex::latest(&label);
             {
                 let mut st = self.state();

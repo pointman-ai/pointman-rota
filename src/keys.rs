@@ -1,8 +1,8 @@
-//! Several keys for a client that runs on an API key (EXT-113; James, Pointman thread 8028 [27934]): Grok and
+//! Several keys for a harness that runs on an API key (EXT-113; James, Pointman thread 8028 [27934]): Grok and
 //! ZCode. Neither has a usage number to read, so rota moves on when one fails.
 //!
-//! - **The keys** are the client's own vault items: `<client>.key` (its `/grok add`, shown as `default`) and any
-//!   `<client>.key.<label>` beside it (`grok.key.work`). The node lists them for rota by label with each run
+//! - **The keys** are the harness's own vault items: `<harness>.key` (its `/grok add`, shown as `default`) and any
+//!   `<harness>.key.<label>` beside it (`grok.key.work`). The node lists them for rota by label with each run
 //!   (`key_labels`) and opens the one rota names (`key_label`, node 0.4.5): rota can't open them, and a run never
 //!   gets a key from rota itself.
 //! - **The rule:** runs stay on a key until a run on it ends at a limit, which rota tells from the run's error.
@@ -18,12 +18,12 @@ use serde::{Deserialize, Serialize};
 use crate::accounts::DEFAULT;
 use crate::util;
 
-/// The clients rota takes keys in turns for: their id, and what people call them.
-pub const CLIENTS: [(&str, &str); 2] = [("grok", "Grok"), ("zcode", "ZCode")];
+/// The harnesses rota takes keys in turns for: their id, and what people call them.
+pub const HARNESSES: [(&str, &str); 2] = [("grok", "Grok"), ("zcode", "ZCode")];
 
-/// Words a run's error has when its key hit a limit. Grok's are its manifest's `[client.limits]`; the rest are
-/// the node's for any client's usage or spend limit (limits.rs), which ZCode's GLM Coding Plan errors use
-/// ("Usage limit reached for 5 hour"). The node doesn't pass a client's own words to hooks, so they're here.
+/// Words a run's error has when its key hit a limit. Grok's are its manifest's `[harness.limits]`; the rest are
+/// the node's for any harness's usage or spend limit (limits.rs), which ZCode's GLM Coding Plan errors use
+/// ("Usage limit reached for 5 hour"). The node doesn't pass a harness's own words to hooks, so they're here.
 static LIMIT: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r"(?i)rate[ _-]?limit|too many requests|quota exceeded|usage limit|hit your [^.·\n]{0,60}limit|spend limit|out of (extra )?usage|credit limit|out of credits|insufficient balance|(5-hour|weekly|session) limit reached",
@@ -31,14 +31,14 @@ static LIMIT: LazyLock<Regex> = LazyLock::new(|| {
     .unwrap()
 });
 
-/// Whether rota takes keys in turns for this client.
-pub fn takes(client: &str) -> bool {
-    CLIENTS.iter().any(|(id, _)| *id == client)
+/// Whether rota takes keys in turns for this harness.
+pub fn takes(harness: &str) -> bool {
+    HARNESSES.iter().any(|(id, _)| *id == harness)
 }
 
-/// What people call a client: Grok.
-pub fn name(client: &str) -> &str {
-    CLIENTS.iter().find(|(id, _)| *id == client).map_or(client, |(_, name)| name)
+/// What people call a harness: Grok.
+pub fn name(harness: &str) -> &str {
+    HARNESSES.iter().find(|(id, _)| *id == harness).map_or(harness, |(_, name)| name)
 }
 
 /// A key's label as the node takes it (`key_label`): lowercase letters, digits and `-`, up to 32.
@@ -48,7 +48,7 @@ pub fn is_label(s: &str) -> bool {
         && s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
-/// A client's keys from the labels the node lists for a run (`key_labels`, "" for its own key), in the order runs
+/// A harness's keys from the labels the node lists for a run (`key_labels`, "" for its own key), in the order runs
 /// move through them: its own key (`default`) first, then the labelled ones by label.
 pub fn labels(offered: &[String]) -> Vec<String> {
     let mut out: Vec<String> = offered.iter().filter(|l| l.as_str() != DEFAULT && is_label(l)).cloned().collect();
@@ -65,14 +65,14 @@ pub fn said_limit(error: &str) -> bool {
     LIMIT.is_match(error)
 }
 
-/// A key a run ended at a limit on: until when it sits out, and the client's words.
+/// A key a run ended at a limit on: until when it sits out, and the harness's words.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 pub struct Limited {
     pub until: f64,
     pub said: String,
 }
 
-/// What rota keeps of one client's keys.
+/// What rota keeps of one harness's keys.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 pub struct Keys {
     /// Its keys here as the node last listed them for a run, in rota's order.
@@ -103,7 +103,7 @@ impl Keys {
 }
 
 /// The key a new run starts on, of `labels` (in order): the current one while it isn't sitting out, else the
-/// next after it that isn't, else the one back soonest. None: the client has no key here.
+/// next after it that isn't, else the one back soonest. None: the harness has no key here.
 pub fn choose(labels: &[String], keys: &Keys, now: f64) -> Option<String> {
     let at = keys.current.as_ref().and_then(|c| labels.iter().position(|l| l == c));
     if let Some(i) = at.filter(|i| !keys.resting(&labels[*i], now)) {
@@ -145,7 +145,7 @@ mod tests {
     }
 
     #[test]
-    fn a_clients_keys_are_its_own_and_its_labelled_ones() {
+    fn a_harnesses_keys_are_its_own_and_its_labelled_ones() {
         assert_eq!(labels(&all(&["work", "", "Bad", "default", "a.b", "b-2", "work"])), ["default", "b-2", "work"]);
         assert_eq!(labels(&all(&["work"])), ["work"]);
         assert!(labels(&[]).is_empty());
